@@ -490,6 +490,64 @@ static void testInvalidProgramMessageUnit(void) {
     error_buffer_clear();
 }
 
+static void testEnableRegisterRange(void) {
+#define TEST_ENABLE(data, reg, expected_reg, expected_error) {      \
+    output_buffer_clear();                                          \
+    error_buffer_clear();                                           \
+    SCPI_Input(&scpi_context, data, strlen(data));                  \
+    CU_ASSERT_EQUAL(SCPI_RegGet(&scpi_context, reg), expected_reg); \
+    CU_ASSERT_EQUAL(err_buffer[0], expected_error);                 \
+    CU_ASSERT_EQUAL(err_buffer_pos, (expected_error) ? 1 : 0);      \
+}
+
+    SCPI_RegSet(&scpi_context, SCPI_REG_ESE, 5);
+    TEST_ENABLE("*ESE 255\n", SCPI_REG_ESE, 255, 0);
+    TEST_ENABLE("*ESE 0\n", SCPI_REG_ESE, 0, 0);
+    SCPI_RegSet(&scpi_context, SCPI_REG_ESE, 5);
+    TEST_ENABLE("*ESE 256\n", SCPI_REG_ESE, 5, SCPI_ERROR_DATA_OUT_OF_RANGE);
+    TEST_ENABLE("*ESE -1\n", SCPI_REG_ESE, 5, SCPI_ERROR_DATA_OUT_OF_RANGE);
+    TEST_ENABLE("*ESE 65541\n", SCPI_REG_ESE, 5, SCPI_ERROR_DATA_OUT_OF_RANGE);
+    TEST_ENABLE("*ESE 4294967301\n", SCPI_REG_ESE, 5, SCPI_ERROR_DATA_OUT_OF_RANGE);
+    TEST_ENABLE("*ESE 255.4\n", SCPI_REG_ESE, 255, 0);
+    SCPI_RegSet(&scpi_context, SCPI_REG_ESE, 5);
+    TEST_ENABLE("*ESE 255.5\n", SCPI_REG_ESE, 5, SCPI_ERROR_DATA_OUT_OF_RANGE);
+
+    SCPI_RegSet(&scpi_context, SCPI_REG_SRE, 5);
+    TEST_ENABLE("*SRE 255\n", SCPI_REG_SRE, 191, 0);
+    TEST_ENABLE("*SRE 64\n", SCPI_REG_SRE, 0, 0);
+    TEST_ENABLE("*SRE 0\n", SCPI_REG_SRE, 0, 0);
+    SCPI_RegSet(&scpi_context, SCPI_REG_SRE, 5);
+    TEST_ENABLE("*SRE 256\n", SCPI_REG_SRE, 5, SCPI_ERROR_DATA_OUT_OF_RANGE);
+    TEST_ENABLE("*SRE -1\n", SCPI_REG_SRE, 5, SCPI_ERROR_DATA_OUT_OF_RANGE);
+    TEST_ENABLE("*SRE 65541\n", SCPI_REG_SRE, 5, SCPI_ERROR_DATA_OUT_OF_RANGE);
+
+    SCPI_RegSet(&scpi_context, SCPI_REG_QUESE, 5);
+    TEST_ENABLE("STAT:QUES:ENAB 32767\n", SCPI_REG_QUESE, 32767, 0);
+    TEST_ENABLE("STAT:QUES:ENAB 0\n", SCPI_REG_QUESE, 0, 0);
+    TEST_ENABLE("STAT:QUES:ENAB 65535\n", SCPI_REG_QUESE, 32767, 0); /* bit 15 is not used */
+    TEST_ENABLE("STAT:QUES:ENAB 32768\n", SCPI_REG_QUESE, 0, 0);
+    SCPI_RegSet(&scpi_context, SCPI_REG_QUESE, 5);
+    TEST_ENABLE("STAT:QUES:ENAB 65536\n", SCPI_REG_QUESE, 5, SCPI_ERROR_DATA_OUT_OF_RANGE);
+    TEST_ENABLE("STAT:QUES:ENAB 99999\n", SCPI_REG_QUESE, 5, SCPI_ERROR_DATA_OUT_OF_RANGE);
+    TEST_ENABLE("STAT:QUES:ENAB -1\n", SCPI_REG_QUESE, 5, SCPI_ERROR_DATA_OUT_OF_RANGE);
+    TEST_ENABLE("STAT:QUES:ENAB 4294967301\n", SCPI_REG_QUESE, 5, SCPI_ERROR_DATA_OUT_OF_RANGE);
+    TEST_ENABLE("STAT:QUES:ENAB 255.4\n", SCPI_REG_QUESE, 255, 0);
+
+    SCPI_RegSet(&scpi_context, SCPI_REG_OPERE, 5);
+    TEST_ENABLE("STAT:OPER:ENAB 32767\n", SCPI_REG_OPERE, 32767, 0);
+    TEST_ENABLE("STAT:OPER:ENAB 65535\n", SCPI_REG_OPERE, 32767, 0);
+    SCPI_RegSet(&scpi_context, SCPI_REG_OPERE, 5);
+    TEST_ENABLE("STAT:OPER:ENAB 65536\n", SCPI_REG_OPERE, 5, SCPI_ERROR_DATA_OUT_OF_RANGE);
+    TEST_ENABLE("STAT:OPER:ENAB -1\n", SCPI_REG_OPERE, 5, SCPI_ERROR_DATA_OUT_OF_RANGE);
+
+    SCPI_RegSet(&scpi_context, SCPI_REG_ESE, 0);
+    SCPI_RegSet(&scpi_context, SCPI_REG_SRE, 0);
+    SCPI_RegSet(&scpi_context, SCPI_REG_QUESE, 0);
+    SCPI_RegSet(&scpi_context, SCPI_REG_OPERE, 0);
+    output_buffer_clear();
+    error_buffer_clear();
+}
+
 static void testHeaderNumericSuffix(void) {
 #define TEST_CHANNEL(data, expected_runs, expected_number, expected_error) {    \
     output_buffer_clear();                                          \
@@ -621,7 +679,7 @@ static void testIEEE4882(void) {
     TEST_IEEE4882("*OPC?\r\n", "1\r\n");
 
     TEST_IEEE4882("*SRE #HFF\r\n", "");
-    TEST_IEEE4882("*SRE?\r\n", "255\r\n");
+    TEST_IEEE4882("*SRE?\r\n", "191\r\n"); /* bit 6 is not used */
     TEST_IEEE4882("*STB?\r\n", "0\r\n");
     TEST_IEEE4882("*ESR?\r\n", "1\r\n");
 
@@ -2118,6 +2176,7 @@ int main() {
             || (NULL == CU_add_test(pSuite, "IEEE 488.2 Mandatory commands", testIEEE4882))
             || (NULL == CU_add_test(pSuite, "Header numeric suffix", testHeaderNumericSuffix))
             || (NULL == CU_add_test(pSuite, "Conversion error reported once", testConversionErrorReportedOnce))
+            || (NULL == CU_add_test(pSuite, "Enable register range", testEnableRegisterRange))
             || (NULL == CU_add_test(pSuite, "Numeric list", testNumericList))
             || (NULL == CU_add_test(pSuite, "Channel list", testChannelList))
             || (NULL == CU_add_test(pSuite, "SCPI_ParamNumber", testParamNumber))

@@ -283,6 +283,10 @@ scpi_result_t SCPI_CoreCls(scpi_t * context) {
 scpi_result_t SCPI_CoreEse(scpi_t * context) {
     int32_t new_ESE;
     if (SCPI_ParamInt32(context, &new_ESE, TRUE)) {
+        if (new_ESE < 0 || new_ESE > 255) {
+            SCPI_ErrorPush(context, SCPI_ERROR_DATA_OUT_OF_RANGE);
+            return SCPI_RES_ERR;
+        }
         SCPI_RegSet(context, SCPI_REG_ESE, (scpi_reg_val_t) new_ESE);
         return SCPI_RES_OK;
     }
@@ -374,7 +378,12 @@ scpi_result_t SCPI_CoreRst(scpi_t * context) {
 scpi_result_t SCPI_CoreSre(scpi_t * context) {
     int32_t new_SRE;
     if (SCPI_ParamInt32(context, &new_SRE, TRUE)) {
-        SCPI_RegSet(context, SCPI_REG_SRE, (scpi_reg_val_t) new_SRE);
+        if (new_SRE < 0 || new_SRE > 255) {
+            SCPI_ErrorPush(context, SCPI_ERROR_DATA_OUT_OF_RANGE);
+            return SCPI_RES_ERR;
+        }
+        /* bit 6 of the service request enable register is ignored (IEEE 488.2) */
+        SCPI_RegSet(context, SCPI_REG_SRE, (scpi_reg_val_t) (new_SRE & ~STB_SRQ));
         return SCPI_RES_OK;
     }
     return SCPI_RES_ERR;

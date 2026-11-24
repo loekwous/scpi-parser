@@ -146,7 +146,12 @@ scpi_result_t SCPI_StatusQuestionableEnableQ(scpi_t * context) {
 scpi_result_t SCPI_StatusQuestionableEnable(scpi_t * context) {
     int32_t new_QUESE;
     if (SCPI_ParamInt32(context, &new_QUESE, TRUE)) {
-        SCPI_RegSet(context, SCPI_REG_QUESE, (scpi_reg_val_t) new_QUESE);
+        if (new_QUESE < 0 || new_QUESE > 0xffff) {
+            SCPI_ErrorPush(context, SCPI_ERROR_DATA_OUT_OF_RANGE);
+            return SCPI_RES_ERR;
+        }
+        /* bit 15 of the status registers is not used (SCPI-99) */
+        SCPI_RegSet(context, SCPI_REG_QUESE, (scpi_reg_val_t) (new_QUESE & 0x7fff));
     }
     return SCPI_RES_OK;
 }
@@ -198,7 +203,12 @@ scpi_result_t SCPI_StatusOperationEventQ(scpi_t * context) {
 scpi_result_t SCPI_StatusOperationEnable(scpi_t * context) {
     int32_t new_OPERE;
     if (SCPI_ParamInt32(context, &new_OPERE, TRUE)) {
-        SCPI_RegSet(context, SCPI_REG_OPERE, (scpi_reg_val_t) new_OPERE);
+        if (new_OPERE < 0 || new_OPERE > 0xffff) {
+            SCPI_ErrorPush(context, SCPI_ERROR_DATA_OUT_OF_RANGE);
+            return SCPI_RES_ERR;
+        }
+        /* bit 15 of the status registers is not used (SCPI-99) */
+        SCPI_RegSet(context, SCPI_REG_OPERE, (scpi_reg_val_t) (new_OPERE & 0x7fff));
     }
     return SCPI_RES_OK;
 }
