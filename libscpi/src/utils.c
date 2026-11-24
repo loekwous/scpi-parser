@@ -366,6 +366,176 @@ size_t strBaseToUInt64(const char * str, uint64_t * val, int8_t base) {
 }
 
 /**
+ * Add one digit to a number
+ * @param val   number
+ * @param digit digit to append
+ * @return      FALSE if the result does not fit into 64 bits
+ */
+static scpi_bool_t appendDecimalDigit(uint64_t * val, unsigned int digit) {
+    if (*val > (UINT64_MAX - digit) / 10) {
+        return FALSE;
+    }
+    *val = *val * 10 + digit;
+    return TRUE;
+}
+
+/**
+ * Converts decimal numeric program data (IEEE 488.2 7.7.2, e.g. 12, +3.0, 1E3, 5 E -1)
+ * to an integer. The fraction and the exponent are taken into account, the result
+ * is rounded to the nearest integer, halves away from zero (IEEE 488.2).
+ * @param str       string value
+ * @param len       length of string
+ * @param negative  result, the number has a minus sign
+ * @param magnitude result, absolute value of the number
+ * @param overflow  result, the magnitude does not fit into 64 bits
+ * @return          number of bytes used in string, 0 if there is no number
+ */
+size_t strDecimalToInteger(const char * str, size_t len, scpi_bool_t * negative, uint64_t * magnitude,
+        scpi_bool_t * overflow) {
+    size_t i = 0;
+    size_t first;
+    size_t last;
+    size_t j;
+    size_t k;
+    size_t digits = 0;
+    size_t fraction = 0;
+    size_t significant = 0;
+    size_t keep;
+    scpi_bool_t roundUp = FALSE;
+    long exponent = 0;
+    long shift;
+    scpi_bool_t expNegative = FALSE;
+    scpi_bool_t started = FALSE;
+    uint64_t result = 0;
+
+    *negative = FALSE;
+    *magnitude = 0;
+    *overflow = FALSE;
+
+    if (i < len && (str[i] == '+' || str[i] == '-')) {
+        *negative = (str[i] == '-');
+        i++;
+    }
+
+    /* mantissa: digits and one decimal point */
+    first = i;
+    while (i < len && isdigit((uint8_t) (str[i]))) {
+        i++;
+        digits++;
+    }
+    if (i < len && str[i] == '.') {
+        i++;
+        while (i < len && isdigit((uint8_t) (str[i]))) {
+            i++;
+            digits++;
+            fraction++;
+        }
+    }
+    last = i;
+    if (digits == 0) {
+        return 0;
+    }
+
+    /* optional exponent, whitespace is allowed around it */
+    j = i;
+    while (j < len && (str[j] == ' ' || str[j] == '\t')) {
+        j++;
+    }
+    if (j < len && (str[j] == 'e' || str[j] == 'E')) {
+        j++;
+        while (j < len && (str[j] == ' ' || str[j] == '\t')) {
+            j++;
+        }
+        if (j < len && (str[j] == '+' || str[j] == '-')) {
+            expNegative = (str[j] == '-');
+            j++;
+        }
+        if (j < len && isdigit((uint8_t) (str[j]))) {
+            while (j < len && isdigit((uint8_t) (str[j]))) {
+                /* the exponent saturates, larger values give the same result for
+                 * any token shorter than 10^8 characters */
+                if (exponent < 100000000) {
+                    exponent = exponent * 10 + (str[j] - '0');
+                }
+                j++;
+            }
+            i = j;
+        }
+    }
+    if (expNegative) {
+        exponent = -exponent;
+    }
+
+    /* count the digits without leading zeros */
+    for (j = first; j < last; j++) {
+        if (str[j] == '.') {
+            continue;
+        }
+        if (str[j] != '0') {
+            started = TRUE;
+        }
+        if (started) {
+            significant++;
+        }
+    }
+    if (significant == 0) {
+        return i;
+    }
+
+    /* the value is the digits * 10^shift */
+    shift = exponent - (long) fraction;
+    if (shift >= 0) {
+        keep = significant;
+    } else if ((size_t) (-shift) > significant) {
+        /* smaller than 0.1 */
+        return i;
+    } else {
+        keep = significant - (size_t) (-shift);
+    }
+
+    started = FALSE;
+    j = 0;
+    for (k = first; k < last; k++) {
+        if (str[k] == '.') {
+            continue;
+        }
+        if (str[k] != '0') {
+            started = TRUE;
+        }
+        if (!started) {
+            continue;
+        }
+        if (j < keep) {
+            if (!*overflow && !appendDecimalDigit(&result, (unsigned int) (str[k] - '0'))) {
+                *overflow = TRUE;
+            }
+        } else if (j == keep) {
+            /* first discarded digit, 5 or more rounds away from zero */
+            roundUp = (str[k] >= '5');
+            break;
+        }
+        j++;
+    }
+
+    if (roundUp && !*overflow) {
+        if (result == UINT64_MAX) {
+            *overflow = TRUE;
+        } else {
+            result++;
+        }
+    }
+
+    for (; shift > 0 && !*overflow; shift--) {
+        if (!appendDecimalDigit(&result, 0)) {
+            *overflow = TRUE;
+        }
+    }
+
+    *magnitude = result;
+    return i;
+}
+
+/**
  * Converts string to float (32 bit) representation
  * @param str   string value
  * @param val   float result

@@ -769,6 +769,95 @@ scpi_bool_t SCPI_ParamIsNumber(scpi_parameter_t * parameter, scpi_bool_t suffixA
 }
 
 /**
+ * Convert parameter to signed/unsigned integer of 32 or 64 bits
+ *
+ * Decimal numeric program data (e.g. 2, 2.0, 2E0, 1.6) is rounded to the nearest
+ * integer, halves away from zero, as IEEE 488.2 requires, and then checked
+ * against the range of the target type. Values out of range give
+ * "Data out of range". Hexadecimal, octal and binary numbers
+ * are accepted in the whole range of the unsigned type.
+ * @param context
+ * @param parameter
+ * @param bits 32 or 64
+ * @param sign
+ * @param value result as two's complement, only the lower bits are valid
+ * @return TRUE if succesful
+ */
+static scpi_bool_t ParamToInteger(scpi_t * context, scpi_parameter_t * parameter, int bits, scpi_bool_t sign,
+        uint64_t * value) {
+    size_t used = 0;
+    int base = 10;
+    scpi_bool_t negative;
+    uint64_t magnitude;
+    uint64_t limit;
+    scpi_bool_t overflow;
+
+    switch (parameter->type) {
+        case SCPI_TOKEN_HEXNUM:
+            base = 16;
+            break;
+        case SCPI_TOKEN_OCTNUM:
+            base = 8;
+            break;
+        case SCPI_TOKEN_BINNUM:
+            base = 2;
+            break;
+        case SCPI_TOKEN_DECIMAL_NUMERIC_PROGRAM_DATA:
+        case SCPI_TOKEN_DECIMAL_NUMERIC_PROGRAM_DATA_WITH_SUFFIX:
+            break;
+        default:
+            return FALSE;
+    }
+
+    if (base != 10) {
+        if (bits == 32) {
+            uint32_t tmp;
+            used = strBaseToUInt32(parameter->ptr, &tmp, (int8_t) base);
+            *value = tmp;
+        } else {
+            used = strBaseToUInt64(parameter->ptr, value, (int8_t) base);
+        }
+        if (used == 0) {
+            SCPI_ErrorPush(context, SCPI_ERROR_DATA_OUT_OF_RANGE);
+            return FALSE;
+        }
+        if (used != (size_t) parameter->len) {
+            SCPI_ErrorPush(context, SCPI_ERROR_DATA_TYPE_ERROR);
+            return FALSE;
+        }
+        return TRUE;
+    }
+
+    used = strDecimalToInteger(parameter->ptr, (size_t) parameter->len, &negative, &magnitude, &overflow);
+    if (used == 0 || (used != (size_t) parameter->len
+            && parameter->type != SCPI_TOKEN_DECIMAL_NUMERIC_PROGRAM_DATA_WITH_SUFFIX)) {
+        SCPI_ErrorPush(context, SCPI_ERROR_DATA_TYPE_ERROR);
+        return FALSE;
+    }
+    if (!overflow) {
+        if (sign) {
+            /* largest magnitude of the signed type, 2^(bits-1) - 1, or 2^(bits-1) for negative */
+            limit = (UINT64_C(1) << (bits - 1)) - 1 + (negative ? 1 : 0);
+        } else {
+            limit = (bits == 32) ? UINT32_MAX : UINT64_MAX;
+            if (negative && magnitude != 0) {
+                overflow = TRUE;
+            }
+        }
+        if (magnitude > limit) {
+            overflow = TRUE;
+        }
+    }
+    if (overflow) {
+        SCPI_ErrorPush(context, SCPI_ERROR_DATA_OUT_OF_RANGE);
+        return FALSE;
+    }
+
+    *value = negative ? (~magnitude + 1) : magnitude;
+    return TRUE;
+}
+
+/**
  * Convert parameter to signed/unsigned 32 bit integer
  * @param context
  * @param parameter
@@ -777,29 +866,18 @@ scpi_bool_t SCPI_ParamIsNumber(scpi_parameter_t * parameter, scpi_bool_t suffixA
  * @return TRUE if succesful
  */
 static scpi_bool_t ParamSignToUInt32(scpi_t * context, scpi_parameter_t * parameter, uint32_t * value, scpi_bool_t sign) {
+    uint64_t result;
 
     if (!value) {
         SCPI_ErrorPush(context, SCPI_ERROR_SYSTEM_ERROR);
         return FALSE;
     }
 
-    switch (parameter->type) {
-        case SCPI_TOKEN_HEXNUM:
-            return strBaseToUInt32(parameter->ptr, value, 16) > 0 ? TRUE : FALSE;
-        case SCPI_TOKEN_OCTNUM:
-            return strBaseToUInt32(parameter->ptr, value, 8) > 0 ? TRUE : FALSE;
-        case SCPI_TOKEN_BINNUM:
-            return strBaseToUInt32(parameter->ptr, value, 2) > 0 ? TRUE : FALSE;
-        case SCPI_TOKEN_DECIMAL_NUMERIC_PROGRAM_DATA:
-        case SCPI_TOKEN_DECIMAL_NUMERIC_PROGRAM_DATA_WITH_SUFFIX:
-            if (sign) {
-                return strBaseToInt32(parameter->ptr, (int32_t *) value, 10) > 0 ? TRUE : FALSE;
-            } else {
-                return strBaseToUInt32(parameter->ptr, value, 10) > 0 ? TRUE : FALSE;
-            }
-        default:
-            return FALSE;
+    if (!ParamToInteger(context, parameter, 32, sign, &result)) {
+        return FALSE;
     }
+    *value = (uint32_t) result;
+    return TRUE;
 }
 
 /**
@@ -817,23 +895,7 @@ static scpi_bool_t ParamSignToUInt64(scpi_t * context, scpi_parameter_t * parame
         return FALSE;
     }
 
-    switch (parameter->type) {
-        case SCPI_TOKEN_HEXNUM:
-            return strBaseToUInt64(parameter->ptr, value, 16) > 0 ? TRUE : FALSE;
-        case SCPI_TOKEN_OCTNUM:
-            return strBaseToUInt64(parameter->ptr, value, 8) > 0 ? TRUE : FALSE;
-        case SCPI_TOKEN_BINNUM:
-            return strBaseToUInt64(parameter->ptr, value, 2) > 0 ? TRUE : FALSE;
-        case SCPI_TOKEN_DECIMAL_NUMERIC_PROGRAM_DATA:
-        case SCPI_TOKEN_DECIMAL_NUMERIC_PROGRAM_DATA_WITH_SUFFIX:
-            if (sign) {
-                return strBaseToInt64(parameter->ptr, (int64_t *) value, 10) > 0 ? TRUE : FALSE;
-            } else {
-                return strBaseToUInt64(parameter->ptr, value, 10) > 0 ? TRUE : FALSE;
-            }
-        default:
-            return FALSE;
-    }
+    return ParamToInteger(context, parameter, 64, sign, value);
 }
 
 /**
@@ -1313,8 +1375,10 @@ scpi_bool_t SCPI_ParamBool(scpi_t * context, scpi_bool_t * value, scpi_bool_t ma
 
     if (result) {
         if (param.type == SCPI_TOKEN_DECIMAL_NUMERIC_PROGRAM_DATA) {
-            SCPI_ParamToInt32(context, &param, &intval);
-            *value = intval ? TRUE : FALSE;
+            result = SCPI_ParamToInt32(context, &param, &intval);
+            if (result) {
+                *value = intval ? TRUE : FALSE;
+            }
         } else {
             result = SCPI_ParamToChoice(context, &param, scpi_bool_def, &intval);
             if (result) {

@@ -104,50 +104,6 @@ static scpi_result_t test_channel(scpi_t * context) {
     return SCPI_RES_OK;
 }
 
-static scpi_result_t test_multiValue(scpi_t * context) {
-    SCPI_ResultInt32(context, 1);
-    SCPI_ResultInt32(context, 2);
-    SCPI_ResultInt32(context, 3);
-
-    return SCPI_RES_OK;
-}
-
-static scpi_result_t test_blockValue(scpi_t * context) {
-    SCPI_ResultArbitraryBlock(context, "ab", 2);
-
-    return SCPI_RES_OK;
-}
-
-static scpi_result_t test_textValue(scpi_t * context) {
-    SCPI_ResultText(context, "hi");
-
-    return SCPI_RES_OK;
-}
-
-static scpi_result_t test_noValue(scpi_t * context) {
-    (void) context;
-
-    return SCPI_RES_OK;
-}
-
-static scpi_result_t test_rawValue(scpi_t * context) {
-    context->interface->write(context, "RAW", 3);
-
-    return SCPI_RES_OK;
-}
-
-static scpi_result_t test_emptyBlock(scpi_t * context) {
-    SCPI_ResultArbitraryBlockHeader(context, 0);
-
-    return SCPI_RES_OK;
-}
-
-static scpi_result_t test_writeValue(scpi_t * context) {
-    SCPI_ResultInt32(context, 7);
-
-    return SCPI_RES_OK;
-}
-
 static const scpi_command_t scpi_commands[] = {
     /* IEEE Mandated Commands (SCPI std V1999.0 4.1.1) */
     { .pattern = "*CLS", .callback = SCPI_CoreCls,},
@@ -228,8 +184,10 @@ static void error_buffer_clear(void) {
 }
 
 static void error_buffer_add(int_fast16_t err) {
-    err_buffer[err_buffer_pos] = err;
-    err_buffer_pos++;
+    if (err_buffer_pos < sizeof(err_buffer) / sizeof(err_buffer[0])) {
+        err_buffer[err_buffer_pos] = err;
+        err_buffer_pos++;
+    }
 }
 
 static size_t SCPI_Write(scpi_t * context, const char * data, size_t len) {
@@ -556,6 +514,36 @@ static void testHeaderNumericSuffix(void) {
     error_buffer_clear();
 }
 
+static void testConversionErrorReportedOnce(void) {
+    scpi_parameter_t param;
+    scpi_bool_t range;
+    int32_t from[1], to[1];
+    size_t dimensions;
+
+    error_buffer_clear();
+    scpi_context.input_count = 0;
+    scpi_context.param_list.lex_state.buffer = "(@1,99999999999)";
+    scpi_context.param_list.lex_state.len = strlen(scpi_context.param_list.lex_state.buffer);
+    scpi_context.param_list.lex_state.pos = scpi_context.param_list.lex_state.buffer;
+    CU_ASSERT_TRUE(SCPI_Parameter(&scpi_context, &param, TRUE));
+    CU_ASSERT_EQUAL(SCPI_ExprChannelListEntry(&scpi_context, &param, 1, &range, from, to, 1, &dimensions),
+            SCPI_EXPR_ERROR);
+    CU_ASSERT_EQUAL(err_buffer_pos, 1);
+    CU_ASSERT_EQUAL(err_buffer[0], SCPI_ERROR_DATA_OUT_OF_RANGE);
+
+    error_buffer_clear();
+    scpi_context.input_count = 0;
+    scpi_context.param_list.lex_state.buffer = "(1:99999999999)";
+    scpi_context.param_list.lex_state.len = strlen(scpi_context.param_list.lex_state.buffer);
+    scpi_context.param_list.lex_state.pos = scpi_context.param_list.lex_state.buffer;
+    CU_ASSERT_TRUE(SCPI_Parameter(&scpi_context, &param, TRUE));
+    CU_ASSERT_EQUAL(SCPI_ExprNumericListEntryInt(&scpi_context, &param, 0, &range, &from[0], &to[0]), SCPI_EXPR_ERROR);
+    CU_ASSERT_EQUAL(err_buffer_pos, 1);
+    CU_ASSERT_EQUAL(err_buffer[0], SCPI_ERROR_DATA_OUT_OF_RANGE);
+
+    error_buffer_clear();
+}
+
 static void testErrorHandlingDeviceDependent(void) {
 #define TEST_CMDERR(output) {\
     SCPI_Input(&scpi_context, "SYST:ERR:NEXT?\r\n", strlen("SYST:ERR:NEXT?\r\n"));\
@@ -761,7 +749,7 @@ static void testIEEE4882(void) {
 static void testSCPI_ParamInt32(void) {
     TEST_ParamInt32("10", TRUE, 10, TRUE, 0);
     TEST_ParamInt32("", FALSE, 0, FALSE, 0);
-    TEST_ParamInt32("10.5", TRUE, 10, TRUE, 0); /* TODO: should be FALSE, -104 */
+    TEST_ParamInt32("10.5", TRUE, 11, TRUE, 0); /* rounded, was a TODO: should be FALSE, -104 */
     TEST_ParamInt32("#B101010", TRUE, 42, TRUE, 0);
     TEST_ParamInt32("#H101010", TRUE, 1052688, TRUE, 0);
     TEST_ParamInt32("#Q10", TRUE, 8, TRUE, 0);
@@ -774,6 +762,48 @@ static void testSCPI_ParamInt32(void) {
     /* test range */
     TEST_ParamInt32("2147483647", TRUE, 2147483647, TRUE, 0);
     TEST_ParamInt32("-2147483647", TRUE, -2147483647, TRUE, 0);
+
+    /* the whole token is converted, an integer in any numeric form is accepted */
+    TEST_ParamInt32("1.5", TRUE, 2, TRUE, 0); /* half away from zero */
+    TEST_ParamInt32("0.5", TRUE, 1, TRUE, 0);
+    TEST_ParamInt32("2.4", TRUE, 2, TRUE, 0);
+    TEST_ParamInt32("2.49999999999999999999", TRUE, 2, TRUE, 0);
+    TEST_ParamInt32("0.04E1", TRUE, 0, TRUE, 0);
+    TEST_ParamInt32("-0.4", TRUE, 0, TRUE, 0);
+    TEST_ParamInt32("1e-3", TRUE, 0, TRUE, 0);
+    TEST_ParamInt32("1500E-3", TRUE, 2, TRUE, 0);
+    TEST_ParamInt32("1.5E1", TRUE, 15, TRUE, 0);
+    TEST_ParamInt32("2E0", TRUE, 2, TRUE, 0);
+    TEST_ParamInt32("2.0", TRUE, 2, TRUE, 0);
+    TEST_ParamInt32("+2.50E+1", TRUE, 25, TRUE, 0);
+    TEST_ParamInt32("1E3", TRUE, 1000, TRUE, 0);
+    TEST_ParamInt32("1 E 3", TRUE, 1000, TRUE, 0);
+    TEST_ParamInt32("100E-2", TRUE, 1, TRUE, 0);
+    TEST_ParamInt32("0.0", TRUE, 0, TRUE, 0);
+    TEST_ParamInt32("-0", TRUE, 0, TRUE, 0);
+    TEST_ParamInt32("0E999999999", TRUE, 0, TRUE, 0);
+    TEST_ParamInt32("1E-999999999", TRUE, 0, TRUE, 0);
+    TEST_ParamInt32("1E999999999", TRUE, 0, FALSE, SCPI_ERROR_DATA_OUT_OF_RANGE);
+    TEST_ParamInt32("99999999999999999999999", TRUE, 0, FALSE, SCPI_ERROR_DATA_OUT_OF_RANGE);
+    TEST_ParamInt32("99999999999999999999999.5", TRUE, 0, FALSE, SCPI_ERROR_DATA_OUT_OF_RANGE);
+    TEST_ParamInt32("#H1FFFFFFFFFFFFFFFF", TRUE, 0, FALSE, SCPI_ERROR_DATA_OUT_OF_RANGE);
+    TEST_ParamInt32("-0.5", TRUE, -1, TRUE, 0);
+    TEST_ParamInt32("-2.4", TRUE, -2, TRUE, 0);
+    TEST_ParamInt32("-2.5", TRUE, -3, TRUE, 0);
+    TEST_ParamInt32("2147483647.4", TRUE, 2147483647, TRUE, 0);
+    TEST_ParamInt32("2147483647.5", TRUE, 0, FALSE, SCPI_ERROR_DATA_OUT_OF_RANGE);
+    TEST_ParamInt32("-2147483648.4", TRUE, (-2147483647 - 1), TRUE, 0);
+    TEST_ParamInt32("-2147483648.5", TRUE, 0, FALSE, SCPI_ERROR_DATA_OUT_OF_RANGE);
+    TEST_ParamInt32("-2147483648", TRUE, (-2147483647 - 1), TRUE, 0);
+    TEST_ParamInt32("2147483648", TRUE, 0, FALSE, SCPI_ERROR_DATA_OUT_OF_RANGE);
+    TEST_ParamInt32("-2147483649", TRUE, 0, FALSE, SCPI_ERROR_DATA_OUT_OF_RANGE);
+    TEST_ParamInt32("4294967296", TRUE, 0, FALSE, SCPI_ERROR_DATA_OUT_OF_RANGE); /* wraps to 0 */
+    TEST_ParamInt32("4294967297", TRUE, 0, FALSE, SCPI_ERROR_DATA_OUT_OF_RANGE); /* wraps to 1 */
+    TEST_ParamInt32("-4294967295", TRUE, 0, FALSE, SCPI_ERROR_DATA_OUT_OF_RANGE); /* wraps to 1 */
+    TEST_ParamInt32("2.147483648E9", TRUE, 0, FALSE, SCPI_ERROR_DATA_OUT_OF_RANGE);
+    TEST_ParamInt32("#HFFFFFFFF", TRUE, -1, TRUE, 0);
+    TEST_ParamInt32("#H100000000", TRUE, 0, FALSE, SCPI_ERROR_DATA_OUT_OF_RANGE);
+    TEST_ParamInt32("#B100000000000000000000000000000000", TRUE, 0, FALSE, SCPI_ERROR_DATA_OUT_OF_RANGE);
 }
 
 #define TEST_ParamUInt32(data, mandatory, expected_value, expected_result, expected_error_code) \
@@ -800,7 +830,7 @@ static void testSCPI_ParamInt32(void) {
 static void testSCPI_ParamUInt32(void) {
     TEST_ParamUInt32("10", TRUE, 10, TRUE, 0);
     TEST_ParamUInt32("", FALSE, 0, FALSE, 0);
-    TEST_ParamUInt32("10.5", TRUE, 10, TRUE, 0); /* TODO: should be FALSE, -104 */
+    TEST_ParamUInt32("10.5", TRUE, 11, TRUE, 0); /* rounded, was a TODO: should be FALSE, -104 */
     TEST_ParamUInt32("#B101010", TRUE, 42, TRUE, 0);
     TEST_ParamUInt32("#H101010", TRUE, 1052688, TRUE, 0);
     TEST_ParamUInt32("#Q10", TRUE, 8, TRUE, 0);
@@ -813,6 +843,42 @@ static void testSCPI_ParamUInt32(void) {
     /* test range */
     TEST_ParamUInt32("2147483647", TRUE, 2147483647ULL, TRUE, 0);
     TEST_ParamUInt32("4294967295", TRUE, 4294967295ULL, TRUE, 0);
+
+    /* the whole token is converted, an integer in any numeric form is accepted */
+    TEST_ParamUInt32("1.5", TRUE, 2, TRUE, 0); /* half away from zero */
+    TEST_ParamUInt32("0.5", TRUE, 1, TRUE, 0);
+    TEST_ParamUInt32("2.4", TRUE, 2, TRUE, 0);
+    TEST_ParamUInt32("2.49999999999999999999", TRUE, 2, TRUE, 0);
+    TEST_ParamUInt32("0.04E1", TRUE, 0, TRUE, 0);
+    TEST_ParamUInt32("-0.4", TRUE, 0, TRUE, 0);
+    TEST_ParamUInt32("1e-3", TRUE, 0, TRUE, 0);
+    TEST_ParamUInt32("1500E-3", TRUE, 2, TRUE, 0);
+    TEST_ParamUInt32("1.5E1", TRUE, 15, TRUE, 0);
+    TEST_ParamUInt32("2E0", TRUE, 2, TRUE, 0);
+    TEST_ParamUInt32("2.0", TRUE, 2, TRUE, 0);
+    TEST_ParamUInt32("+2.50E+1", TRUE, 25, TRUE, 0);
+    TEST_ParamUInt32("1E3", TRUE, 1000, TRUE, 0);
+    TEST_ParamUInt32("1 E 3", TRUE, 1000, TRUE, 0);
+    TEST_ParamUInt32("100E-2", TRUE, 1, TRUE, 0);
+    TEST_ParamUInt32("0.0", TRUE, 0, TRUE, 0);
+    TEST_ParamUInt32("-0", TRUE, 0, TRUE, 0);
+    TEST_ParamUInt32("0E999999999", TRUE, 0, TRUE, 0);
+    TEST_ParamUInt32("1E-999999999", TRUE, 0, TRUE, 0);
+    TEST_ParamUInt32("1E999999999", TRUE, 0, FALSE, SCPI_ERROR_DATA_OUT_OF_RANGE);
+    TEST_ParamUInt32("99999999999999999999999", TRUE, 0, FALSE, SCPI_ERROR_DATA_OUT_OF_RANGE);
+    TEST_ParamUInt32("99999999999999999999999.5", TRUE, 0, FALSE, SCPI_ERROR_DATA_OUT_OF_RANGE);
+    TEST_ParamUInt32("#H1FFFFFFFFFFFFFFFF", TRUE, 0, FALSE, SCPI_ERROR_DATA_OUT_OF_RANGE);
+    TEST_ParamUInt32("4294967295.0", TRUE, 4294967295ULL, TRUE, 0);
+    TEST_ParamUInt32("4294967295.4", TRUE, 4294967295ULL, TRUE, 0);
+    TEST_ParamUInt32("4294967295.5", TRUE, 0, FALSE, SCPI_ERROR_DATA_OUT_OF_RANGE);
+    TEST_ParamUInt32("-0.5", TRUE, 0, FALSE, SCPI_ERROR_DATA_OUT_OF_RANGE);
+    TEST_ParamUInt32("4294967296", TRUE, 0, FALSE, SCPI_ERROR_DATA_OUT_OF_RANGE); /* wraps to 0 */
+    TEST_ParamUInt32("4294967297", TRUE, 0, FALSE, SCPI_ERROR_DATA_OUT_OF_RANGE); /* wraps to 1 */
+    TEST_ParamUInt32("-1", TRUE, 0, FALSE, SCPI_ERROR_DATA_OUT_OF_RANGE);
+    TEST_ParamUInt32("-4294967295", TRUE, 0, FALSE, SCPI_ERROR_DATA_OUT_OF_RANGE); /* 1 with 32 bit long */
+    TEST_ParamUInt32("-4294967296", TRUE, 0, FALSE, SCPI_ERROR_DATA_OUT_OF_RANGE);
+    TEST_ParamUInt32("#HFFFFFFFF", TRUE, 4294967295ULL, TRUE, 0);
+    TEST_ParamUInt32("#H100000000", TRUE, 0, FALSE, SCPI_ERROR_DATA_OUT_OF_RANGE);
 }
 
 #define TEST_ParamInt64(data, mandatory, expected_value, expected_result, expected_error_code) \
@@ -839,7 +905,7 @@ static void testSCPI_ParamUInt32(void) {
 static void testSCPI_ParamInt64(void) {
     TEST_ParamInt64("10", TRUE, 10, TRUE, 0);
     TEST_ParamInt64("", FALSE, 0, FALSE, 0);
-    TEST_ParamInt64("10.5", TRUE, 10, TRUE, 0); /* TODO: should be FALSE, -104 */
+    TEST_ParamInt64("10.5", TRUE, 11, TRUE, 0); /* rounded, was a TODO: should be FALSE, -104 */
     TEST_ParamInt64("#B101010", TRUE, 42, TRUE, 0);
     TEST_ParamInt64("#H101010", TRUE, 1052688, TRUE, 0);
     TEST_ParamInt64("#Q10", TRUE, 8, TRUE, 0);
@@ -854,6 +920,40 @@ static void testSCPI_ParamInt64(void) {
     TEST_ParamInt64("-2147483647", TRUE, -2147483647LL, TRUE, 0);
     TEST_ParamInt64("9223372036854775807", TRUE, 9223372036854775807LL, TRUE, 0);
     TEST_ParamInt64("-9223372036854775807", TRUE, -9223372036854775807LL, TRUE, 0);
+
+    /* the whole token is converted, an integer in any numeric form is accepted */
+    TEST_ParamInt64("1.5", TRUE, 2, TRUE, 0); /* half away from zero */
+    TEST_ParamInt64("0.5", TRUE, 1, TRUE, 0);
+    TEST_ParamInt64("2.4", TRUE, 2, TRUE, 0);
+    TEST_ParamInt64("2.49999999999999999999", TRUE, 2, TRUE, 0);
+    TEST_ParamInt64("0.04E1", TRUE, 0, TRUE, 0);
+    TEST_ParamInt64("-0.4", TRUE, 0, TRUE, 0);
+    TEST_ParamInt64("1e-3", TRUE, 0, TRUE, 0);
+    TEST_ParamInt64("1500E-3", TRUE, 2, TRUE, 0);
+    TEST_ParamInt64("1.5E1", TRUE, 15, TRUE, 0);
+    TEST_ParamInt64("2E0", TRUE, 2, TRUE, 0);
+    TEST_ParamInt64("2.0", TRUE, 2, TRUE, 0);
+    TEST_ParamInt64("+2.50E+1", TRUE, 25, TRUE, 0);
+    TEST_ParamInt64("1E3", TRUE, 1000, TRUE, 0);
+    TEST_ParamInt64("1 E 3", TRUE, 1000, TRUE, 0);
+    TEST_ParamInt64("100E-2", TRUE, 1, TRUE, 0);
+    TEST_ParamInt64("0.0", TRUE, 0, TRUE, 0);
+    TEST_ParamInt64("-0", TRUE, 0, TRUE, 0);
+    TEST_ParamInt64("0E999999999", TRUE, 0, TRUE, 0);
+    TEST_ParamInt64("1E-999999999", TRUE, 0, TRUE, 0);
+    TEST_ParamInt64("1E999999999", TRUE, 0, FALSE, SCPI_ERROR_DATA_OUT_OF_RANGE);
+    TEST_ParamInt64("99999999999999999999999", TRUE, 0, FALSE, SCPI_ERROR_DATA_OUT_OF_RANGE);
+    TEST_ParamInt64("99999999999999999999999.5", TRUE, 0, FALSE, SCPI_ERROR_DATA_OUT_OF_RANGE);
+    TEST_ParamInt64("#H1FFFFFFFFFFFFFFFF", TRUE, 0, FALSE, SCPI_ERROR_DATA_OUT_OF_RANGE);
+    TEST_ParamInt64("-0.5", TRUE, -1, TRUE, 0);
+    TEST_ParamInt64("9223372036854775807.5", TRUE, 0, FALSE, SCPI_ERROR_DATA_OUT_OF_RANGE);
+    TEST_ParamInt64("-9223372036854775808", TRUE, (-9223372036854775807LL - 1), TRUE, 0);
+    TEST_ParamInt64("9223372036854775808", TRUE, 0, FALSE, SCPI_ERROR_DATA_OUT_OF_RANGE);
+    TEST_ParamInt64("-9223372036854775809", TRUE, 0, FALSE, SCPI_ERROR_DATA_OUT_OF_RANGE);
+    TEST_ParamInt64("18446744073709551617", TRUE, 0, FALSE, SCPI_ERROR_DATA_OUT_OF_RANGE); /* wraps to 1 */
+    TEST_ParamInt64("4294967297", TRUE, 4294967297LL, TRUE, 0);
+    TEST_ParamInt64("9.223372036854775807E18", TRUE, 9223372036854775807LL, TRUE, 0);
+    TEST_ParamInt64("#HFFFFFFFFFFFFFFFF", TRUE, -1, TRUE, 0);
 }
 
 #define TEST_ParamUInt64(data, mandatory, expected_value, expected_result, expected_error_code) \
@@ -880,7 +980,7 @@ static void testSCPI_ParamInt64(void) {
 static void testSCPI_ParamUInt64(void) {
     TEST_ParamUInt64("10", TRUE, 10, TRUE, 0);
     TEST_ParamUInt64("", FALSE, 0, FALSE, 0);
-    TEST_ParamUInt64("10.5", TRUE, 10, TRUE, 0); /* TODO: should be FALSE, -104 */
+    TEST_ParamUInt64("10.5", TRUE, 11, TRUE, 0); /* rounded, was a TODO: should be FALSE, -104 */
     TEST_ParamUInt64("#B101010", TRUE, 42, TRUE, 0);
     TEST_ParamUInt64("#H101010", TRUE, 1052688, TRUE, 0);
     TEST_ParamUInt64("#Q10", TRUE, 8, TRUE, 0);
@@ -895,6 +995,40 @@ static void testSCPI_ParamUInt64(void) {
     TEST_ParamUInt64("4294967295", TRUE, 4294967295ULL, TRUE, 0);
     TEST_ParamUInt64("9223372036854775807", TRUE, 9223372036854775807ULL, TRUE, 0);
     TEST_ParamUInt64("18446744073709551615", TRUE, 18446744073709551615ULL, TRUE, 0);
+
+    /* the whole token is converted, an integer in any numeric form is accepted */
+    TEST_ParamUInt64("1.5", TRUE, 2, TRUE, 0); /* half away from zero */
+    TEST_ParamUInt64("0.5", TRUE, 1, TRUE, 0);
+    TEST_ParamUInt64("2.4", TRUE, 2, TRUE, 0);
+    TEST_ParamUInt64("2.49999999999999999999", TRUE, 2, TRUE, 0);
+    TEST_ParamUInt64("0.04E1", TRUE, 0, TRUE, 0);
+    TEST_ParamUInt64("-0.4", TRUE, 0, TRUE, 0);
+    TEST_ParamUInt64("1e-3", TRUE, 0, TRUE, 0);
+    TEST_ParamUInt64("1500E-3", TRUE, 2, TRUE, 0);
+    TEST_ParamUInt64("1.5E1", TRUE, 15, TRUE, 0);
+    TEST_ParamUInt64("2E0", TRUE, 2, TRUE, 0);
+    TEST_ParamUInt64("2.0", TRUE, 2, TRUE, 0);
+    TEST_ParamUInt64("+2.50E+1", TRUE, 25, TRUE, 0);
+    TEST_ParamUInt64("1E3", TRUE, 1000, TRUE, 0);
+    TEST_ParamUInt64("1 E 3", TRUE, 1000, TRUE, 0);
+    TEST_ParamUInt64("100E-2", TRUE, 1, TRUE, 0);
+    TEST_ParamUInt64("0.0", TRUE, 0, TRUE, 0);
+    TEST_ParamUInt64("-0", TRUE, 0, TRUE, 0);
+    TEST_ParamUInt64("0E999999999", TRUE, 0, TRUE, 0);
+    TEST_ParamUInt64("1E-999999999", TRUE, 0, TRUE, 0);
+    TEST_ParamUInt64("1E999999999", TRUE, 0, FALSE, SCPI_ERROR_DATA_OUT_OF_RANGE);
+    TEST_ParamUInt64("99999999999999999999999", TRUE, 0, FALSE, SCPI_ERROR_DATA_OUT_OF_RANGE);
+    TEST_ParamUInt64("99999999999999999999999.5", TRUE, 0, FALSE, SCPI_ERROR_DATA_OUT_OF_RANGE);
+    TEST_ParamUInt64("#H1FFFFFFFFFFFFFFFF", TRUE, 0, FALSE, SCPI_ERROR_DATA_OUT_OF_RANGE);
+    TEST_ParamUInt64("18446744073709551616", TRUE, 0, FALSE, SCPI_ERROR_DATA_OUT_OF_RANGE);
+    TEST_ParamUInt64("18446744073709551617", TRUE, 0, FALSE, SCPI_ERROR_DATA_OUT_OF_RANGE); /* wraps to 1 */
+    TEST_ParamUInt64("18446744073709551615.4", TRUE, 18446744073709551615ULL, TRUE, 0);
+    TEST_ParamUInt64("18446744073709551615.5", TRUE, 0, FALSE, SCPI_ERROR_DATA_OUT_OF_RANGE);
+    TEST_ParamUInt64("1E19", TRUE, 10000000000000000000ULL, TRUE, 0);
+    TEST_ParamUInt64("1E20", TRUE, 0, FALSE, SCPI_ERROR_DATA_OUT_OF_RANGE);
+    TEST_ParamUInt64("-1", TRUE, 0, FALSE, SCPI_ERROR_DATA_OUT_OF_RANGE);
+    TEST_ParamUInt64("-18446744073709551615", TRUE, 0, FALSE, SCPI_ERROR_DATA_OUT_OF_RANGE); /* 1 when negated */
+    TEST_ParamUInt64("#HFFFFFFFFFFFFFFFF", TRUE, 18446744073709551615ULL, TRUE, 0);
 }
 
 
@@ -1091,6 +1225,11 @@ static void testSCPI_ParamBool(void) {
     TEST_ParamBool("OFF", TRUE, FALSE, TRUE, 0);
     TEST_ParamBool("0", TRUE, FALSE, TRUE, 0);
     TEST_ParamBool("XYZ", TRUE, FALSE, FALSE, SCPI_ERROR_ILLEGAL_PARAMETER_VALUE);
+    TEST_ParamBool("1.5", TRUE, TRUE, TRUE, 0);
+    TEST_ParamBool("0.4", TRUE, FALSE, TRUE, 0);
+    TEST_ParamBool("0.5", TRUE, TRUE, TRUE, 0);
+    TEST_ParamBool("1E0", TRUE, TRUE, TRUE, 0);
+    TEST_ParamBool("4294967297", TRUE, FALSE, FALSE, SCPI_ERROR_DATA_OUT_OF_RANGE);
 }
 
 #define TEST_ParamChoice(data, mandatory, expected_value, expected_result, expected_error_code) \
@@ -1196,6 +1335,11 @@ static void testNumericList(void) {
     TEST_NumericListInt("(12,5:6:3)", 0, FALSE, 12, 0, SCPI_EXPR_OK, 0);
     TEST_NumericListInt("(12,5:6:3)", 1, TRUE, 5, 6, SCPI_EXPR_OK, 0);
     TEST_NumericListInt("(12,5:6:3)", 2, FALSE, 0, 0, SCPI_EXPR_ERROR, SCPI_ERROR_EXPRESSION_PARSING_ERROR);
+    TEST_NumericListInt("(1.4,5:6)", 0, FALSE, 1, 0, SCPI_EXPR_OK, 0);
+    TEST_NumericListInt("(1.5,5:6)", 0, FALSE, 2, 0, SCPI_EXPR_OK, 0);
+    TEST_NumericListInt("(1:99999999999)", 0, FALSE, 0, 0, SCPI_EXPR_ERROR, SCPI_ERROR_DATA_OUT_OF_RANGE);
+    TEST_NumericListInt("(99999999999:1)", 0, FALSE, 0, 0, SCPI_EXPR_ERROR, SCPI_ERROR_DATA_OUT_OF_RANGE);
+    TEST_NumericListInt("(99999999999)", 0, FALSE, 0, 0, SCPI_EXPR_ERROR, SCPI_ERROR_DATA_OUT_OF_RANGE);
 
     TEST_NumericListDouble("(1:2,5:6)", 0, TRUE, 1, 2, SCPI_EXPR_OK, 0);
     TEST_NumericListDouble("(1:2,5:6)", 1, TRUE, 5, 6, SCPI_EXPR_OK, 0);
@@ -1282,6 +1426,15 @@ static void testChannelList(void) {
     TEST_ChannelList("(@1,)", 1, 1, FALSE, 0, (0), (0), SCPI_EXPR_ERROR, SCPI_ERROR_EXPRESSION_PARSING_ERROR);
     TEST_ChannelList("(@1,2:)", 1, 1, FALSE, 0, (0), (0), SCPI_EXPR_ERROR, SCPI_ERROR_EXPRESSION_PARSING_ERROR);
     TEST_ChannelList("abcd", 1, 1, FALSE, 0, (0), (0), SCPI_EXPR_ERROR, SCPI_ERROR_DATA_TYPE_ERROR);
+
+    /* channel numbers are converted as a whole and range checked */
+    TEST_ChannelList("(@2E0)", 0, 1, FALSE, 1, (2), (0), SCPI_EXPR_OK, 0);
+    TEST_ChannelList("(@1.5)", 0, 1, FALSE, 1, (2), (0), SCPI_EXPR_OK, 0);
+    TEST_ChannelList("(@1.4)", 0, 1, FALSE, 1, (1), (0), SCPI_EXPR_OK, 0);
+    TEST_ChannelList("(@4294967297)", 0, 1, FALSE, 0, (0), (0), SCPI_EXPR_ERROR, SCPI_ERROR_DATA_OUT_OF_RANGE);
+    TEST_ChannelList("(@1,2:99999999999)", 1, 1, FALSE, 0, (0), (0), SCPI_EXPR_ERROR, SCPI_ERROR_DATA_OUT_OF_RANGE);
+    TEST_ChannelList("(@1!2.5)", 0, 2, FALSE, 2, (1, 3), (0), SCPI_EXPR_OK, 0);
+    TEST_ChannelList("(@1!99999999999)", 0, 2, FALSE, 0, (0), (0), SCPI_EXPR_ERROR, SCPI_ERROR_DATA_OUT_OF_RANGE);
 }
 
 
@@ -1961,9 +2114,10 @@ int main() {
             || (NULL == CU_add_test(pSuite, "Commands handling", testCommandsHandling))
             || (NULL == CU_add_test(pSuite, "Error handling", testErrorHandling))
             || (NULL == CU_add_test(pSuite, "Invalid program message unit", testInvalidProgramMessageUnit))
-            || (NULL == CU_add_test(pSuite, "Header numeric suffix", testHeaderNumericSuffix))
             || (NULL == CU_add_test(pSuite, "Device dependent error handling", testErrorHandlingDeviceDependent))
             || (NULL == CU_add_test(pSuite, "IEEE 488.2 Mandatory commands", testIEEE4882))
+            || (NULL == CU_add_test(pSuite, "Header numeric suffix", testHeaderNumericSuffix))
+            || (NULL == CU_add_test(pSuite, "Conversion error reported once", testConversionErrorReportedOnce))
             || (NULL == CU_add_test(pSuite, "Numeric list", testNumericList))
             || (NULL == CU_add_test(pSuite, "Channel list", testChannelList))
             || (NULL == CU_add_test(pSuite, "SCPI_ParamNumber", testParamNumber))

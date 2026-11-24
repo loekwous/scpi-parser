@@ -452,6 +452,66 @@ static void test_strBaseToUInt64() {
     TEST_STR_TO_UINT64("-0", 2, 0, 10);
 }
 
+static void test_strDecimalToInteger() {
+    size_t result;
+    scpi_bool_t negative;
+    uint64_t magnitude;
+    scpi_bool_t overflow;
+
+#define TEST_DECIMAL_TO_INTEGER(s, r, n, m, st)                                 \
+    do {                                                                        \
+        result = strDecimalToInteger(s, strlen(s), &negative, &magnitude, &overflow); \
+        CU_ASSERT_EQUAL(result, r);                                             \
+        CU_ASSERT_EQUAL(overflow, st);                                          \
+        if (!st) {                                                              \
+            CU_ASSERT_EQUAL(negative, n);                                       \
+            CU_ASSERT_EQUAL(magnitude, m);                                      \
+        }                                                                       \
+    } while(0)
+
+    TEST_DECIMAL_TO_INTEGER("", 0, FALSE, 0, FALSE);
+    TEST_DECIMAL_TO_INTEGER("abc", 0, FALSE, 0, FALSE);
+    TEST_DECIMAL_TO_INTEGER("12", 2, FALSE, 12, FALSE);
+    TEST_DECIMAL_TO_INTEGER("-12", 3, TRUE, 12, FALSE);
+    TEST_DECIMAL_TO_INTEGER("+12", 3, FALSE, 12, FALSE);
+    TEST_DECIMAL_TO_INTEGER("007", 3, FALSE, 7, FALSE);
+    TEST_DECIMAL_TO_INTEGER("12.", 3, FALSE, 12, FALSE);
+    TEST_DECIMAL_TO_INTEGER("12.000", 6, FALSE, 12, FALSE);
+    TEST_DECIMAL_TO_INTEGER("12.5", 4, FALSE, 13, FALSE); /* halves away from zero */
+    TEST_DECIMAL_TO_INTEGER("-12.5", 5, TRUE, 13, FALSE);
+    TEST_DECIMAL_TO_INTEGER("12.4999", 7, FALSE, 12, FALSE);
+    TEST_DECIMAL_TO_INTEGER("0.5", 3, FALSE, 1, FALSE);
+    TEST_DECIMAL_TO_INTEGER("0.49", 4, FALSE, 0, FALSE);
+    TEST_DECIMAL_TO_INTEGER("0.05", 4, FALSE, 0, FALSE);
+    TEST_DECIMAL_TO_INTEGER("0.0999", 6, FALSE, 0, FALSE);
+    TEST_DECIMAL_TO_INTEGER("9.5", 3, FALSE, 10, FALSE);
+    TEST_DECIMAL_TO_INTEGER("99.5", 4, FALSE, 100, FALSE);
+    TEST_DECIMAL_TO_INTEGER(".5", 2, FALSE, 1, FALSE);
+    TEST_DECIMAL_TO_INTEGER("0.0", 3, FALSE, 0, FALSE);
+    TEST_DECIMAL_TO_INTEGER("2E0", 3, FALSE, 2, FALSE);
+    TEST_DECIMAL_TO_INTEGER("2e+1", 4, FALSE, 20, FALSE);
+    TEST_DECIMAL_TO_INTEGER("2 E 1", 5, FALSE, 20, FALSE);
+    TEST_DECIMAL_TO_INTEGER("1E-3", 4, FALSE, 0, FALSE);
+    TEST_DECIMAL_TO_INTEGER("5E-1", 4, FALSE, 1, FALSE);
+    TEST_DECIMAL_TO_INTEGER("1500E-3", 7, FALSE, 2, FALSE);
+    TEST_DECIMAL_TO_INTEGER("1000E-3", 7, FALSE, 1, FALSE);
+    TEST_DECIMAL_TO_INTEGER("1.25E2", 6, FALSE, 125, FALSE);
+    TEST_DECIMAL_TO_INTEGER("1.25E1", 6, FALSE, 13, FALSE);
+    TEST_DECIMAL_TO_INTEGER("12E", 2, FALSE, 12, FALSE); /* incomplete exponent is not used */
+    TEST_DECIMAL_TO_INTEGER("12V", 2, FALSE, 12, FALSE); /* suffix is not used */
+    TEST_DECIMAL_TO_INTEGER("-0", 2, TRUE, 0, FALSE);
+    TEST_DECIMAL_TO_INTEGER("0E99999", 7, FALSE, 0, FALSE);
+    TEST_DECIMAL_TO_INTEGER("18446744073709551615", 20, FALSE, 18446744073709551615ULL, FALSE);
+    TEST_DECIMAL_TO_INTEGER("18446744073709551616", 20, FALSE, 0, TRUE);
+    TEST_DECIMAL_TO_INTEGER("1844674407370955161.5E1", 23, FALSE, 18446744073709551615ULL, FALSE);
+    TEST_DECIMAL_TO_INTEGER("1844674407370955161.6E1", 23, FALSE, 0, TRUE);
+    TEST_DECIMAL_TO_INTEGER("18446744073709551615.5", 22, FALSE, 0, TRUE);
+    TEST_DECIMAL_TO_INTEGER("1.8446744073709551615E19", 24, FALSE, 18446744073709551615ULL, FALSE);
+    TEST_DECIMAL_TO_INTEGER("1E20", 4, FALSE, 0, TRUE);
+    TEST_DECIMAL_TO_INTEGER("1E99999999999999999999", 22, FALSE, 0, TRUE);
+    TEST_DECIMAL_TO_INTEGER("1E-99999999999999999999", 23, FALSE, 0, FALSE);
+}
+
 static void test_strToDouble() {
     double val;
     size_t result;
@@ -882,6 +942,7 @@ int main() {
             || (NULL == CU_add_test(pSuite, "strBaseToUInt32", test_strBaseToUInt32))
             || (NULL == CU_add_test(pSuite, "strBaseToInt64", test_strBaseToInt64))
             || (NULL == CU_add_test(pSuite, "strBaseToUInt64", test_strBaseToUInt64))
+            || (NULL == CU_add_test(pSuite, "strDecimalToInteger", test_strDecimalToInteger))
             || (NULL == CU_add_test(pSuite, "strToDouble", test_strToDouble))
             || (NULL == CU_add_test(pSuite, "compareStr", test_compareStr))
             || (NULL == CU_add_test(pSuite, "compareStrAndNum", test_compareStrAndNum))

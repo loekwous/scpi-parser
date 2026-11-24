@@ -140,11 +140,14 @@ scpi_expr_result_t SCPI_ExprNumericListEntryInt(scpi_t * context, scpi_parameter
 
     res = SCPI_ExprNumericListEntry(context, param, index, &range, &paramFrom, &paramTo);
     if (res == SCPI_EXPR_OK) {
-        *isRange = range;
-        SCPI_ParamToInt32(context, &paramFrom, valueFrom);
-        if (range) {
-            SCPI_ParamToInt32(context, &paramTo, valueTo);
+        /* the conversion has already pushed the error */
+        if (!SCPI_ParamToInt32(context, &paramFrom, valueFrom)) {
+            return SCPI_EXPR_ERROR;
         }
+        if (range && !SCPI_ParamToInt32(context, &paramTo, valueTo)) {
+            return SCPI_EXPR_ERROR;
+        }
+        *isRange = range;
     }
 
     return res;
@@ -188,13 +191,18 @@ scpi_expr_result_t SCPI_ExprNumericListEntryDouble(scpi_t * context, scpi_parame
  * @param values range values
  * @param length length of values array
  * @param dimensions real number of dimensions
+ * @param reported set to true if the error was already pushed
  */
-static scpi_expr_result_t channelSpec(scpi_t * context, lex_state_t * state, int32_t * values, size_t length, size_t * dimensions) {
+static scpi_expr_result_t channelSpec(scpi_t * context, lex_state_t * state, int32_t * values, size_t length,
+        size_t * dimensions, scpi_bool_t * reported) {
     scpi_parameter_t param;
     size_t i = 0;
     while (scpiLex_DecimalNumericProgramData(state, &param)) {
         if (i < length) {
-            SCPI_ParamToInt32(context, &param, &values[i]);
+            if (!SCPI_ParamToInt32(context, &param, &values[i])) {
+                *reported = TRUE;
+                return SCPI_EXPR_ERROR;
+            }
         }
 
         if (scpiLex_SpecificCharacter(state, &param, '!')) {
@@ -222,18 +230,20 @@ static scpi_expr_result_t channelSpec(scpi_t * context, lex_state_t * state, int
  * @param valuesTo return array of values to
  * @param length length of values arrays
  * @param dimensions real number of dimensions
+ * @param reported set to true if the error was already pushed
  */
-static scpi_expr_result_t channelRange(scpi_t * context, lex_state_t * state, scpi_bool_t * isRange, int32_t * valuesFrom, int32_t * valuesTo, size_t length, size_t * dimensions) {
+static scpi_expr_result_t channelRange(scpi_t * context, lex_state_t * state, scpi_bool_t * isRange,
+        int32_t * valuesFrom, int32_t * valuesTo, size_t length, size_t * dimensions, scpi_bool_t * reported) {
     scpi_token_t token;
     scpi_expr_result_t err;
     size_t fromDimensions;
     size_t toDimensions;
 
-    err = channelSpec(context, state, valuesFrom, length, &fromDimensions);
+    err = channelSpec(context, state, valuesFrom, length, &fromDimensions, reported);
     if (err == SCPI_EXPR_OK) {
         if (scpiLex_Colon(state, &token)) {
             *isRange = TRUE;
-            err = channelSpec(context, state, valuesTo, length, &toDimensions);
+            err = channelSpec(context, state, valuesTo, length, &toDimensions, reported);
             if (err != SCPI_EXPR_OK) {
                 return SCPI_EXPR_ERROR;
             }
@@ -269,6 +279,7 @@ scpi_expr_result_t SCPI_ExprChannelListEntry(scpi_t * context, scpi_parameter_t 
     int i;
     scpi_expr_result_t res = SCPI_EXPR_OK;
     scpi_token_t token;
+    scpi_bool_t reported = FALSE;
 
     if (!isRange || !param || !dimensions || (length && (!valuesFrom || !valuesTo))) {
         SCPI_ErrorPush(context, SCPI_ERROR_SYSTEM_ERROR);
@@ -291,7 +302,8 @@ scpi_expr_result_t SCPI_ExprChannelListEntry(scpi_t * context, scpi_parameter_t 
     }
 
     for (i = 0; i <= index; i++) {
-        res = channelRange(context, &lex, isRange, valuesFrom, valuesTo, (i == index) ? length : 0, dimensions);
+        res = channelRange(context, &lex, isRange, valuesFrom, valuesTo, (i == index) ? length : 0, dimensions,
+                &reported);
         if (res != SCPI_EXPR_OK) {
             break;
         }
@@ -303,7 +315,7 @@ scpi_expr_result_t SCPI_ExprChannelListEntry(scpi_t * context, scpi_parameter_t 
         }
     }
 
-    if (res == SCPI_EXPR_ERROR) {
+    if (res == SCPI_EXPR_ERROR && !reported) {
         SCPI_ErrorPush(context, SCPI_ERROR_EXPRESSION_PARSING_ERROR);
     }
     if (res == SCPI_EXPR_NO_MORE) {
