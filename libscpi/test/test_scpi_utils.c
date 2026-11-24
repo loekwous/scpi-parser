@@ -349,6 +349,12 @@ static void test_strBaseToInt32() {
     TEST_STR_TO_INT32("FF", 2, 255, 16); /* hexadecimal FF */
     TEST_STR_TO_INT32("77", 2, 63, 8); /* octal 77 */
     TEST_STR_TO_INT32("18", 1, 1, 8); /* octal 1, 8 is ignored */
+    TEST_STR_TO_INT32("2147483647", 10, 2147483647, 10);
+    TEST_STR_TO_INT32("-2147483648", 11, (-2147483647 - 1), 10);
+    TEST_STR_TO_INT32("2147483648", 0, 0, 10); /* out of range */
+    TEST_STR_TO_INT32("-2147483649", 0, 0, 10);
+    TEST_STR_TO_INT32("4294967297", 0, 0, 10); /* 1 when truncated */
+    TEST_STR_TO_INT32("99999999999999999999", 0, 0, 10); /* ERANGE */
 }
 
 static void test_strBaseToUInt32() {
@@ -374,6 +380,14 @@ static void test_strBaseToUInt32() {
     TEST_STR_TO_UINT32("FF", 2, 255, 16); /* hexadecimal FF */
     TEST_STR_TO_UINT32("77", 2, 63, 8); /* octal 77 */
     TEST_STR_TO_UINT32("18", 1, 1, 8); /* octal 1, 8 is ignored */
+    TEST_STR_TO_UINT32("4294967295", 10, 4294967295u, 10);
+    TEST_STR_TO_UINT32("4294967296", 0, 0, 10); /* out of range */
+    TEST_STR_TO_UINT32("4294967297", 0, 0, 10); /* 1 when truncated */
+    TEST_STR_TO_UINT32("-1", 0, 0, 10); /* negative */
+    TEST_STR_TO_UINT32("-4294967295", 0, 0, 10); /* 1 with 32 bit long */
+    TEST_STR_TO_UINT32("-0", 2, 0, 10);
+    TEST_STR_TO_UINT32("99999999999999999999", 0, 0, 10); /* ERANGE */
+    TEST_STR_TO_UINT32("100000000", 0, 0, 16);
     TEST_STR_TO_UINT32("FFFFFFFF", 8, 0xffffffffu, 16); /* octal 1, 8 is ignored */
 }
 
@@ -401,6 +415,10 @@ static void test_strBaseToInt64() {
     TEST_STR_TO_INT64("FF", 2, 255, 16); /* hexadecimal FF */
     TEST_STR_TO_INT64("77", 2, 63, 8); /* octal 77 */
     TEST_STR_TO_INT64("18", 1, 1, 8); /* octal 1, 8 is ignored */
+    TEST_STR_TO_INT64("9223372036854775807", 19, 9223372036854775807LL, 10);
+    TEST_STR_TO_INT64("-9223372036854775808", 20, (-9223372036854775807LL - 1), 10);
+    TEST_STR_TO_INT64("9223372036854775808", 0, 0, 10); /* ERANGE */
+    TEST_STR_TO_INT64("-9223372036854775809", 0, 0, 10);
 }
 
 static void test_strBaseToUInt64() {
@@ -427,6 +445,11 @@ static void test_strBaseToUInt64() {
     TEST_STR_TO_UINT64("77", 2, 63, 8); /* octal 77 */
     TEST_STR_TO_UINT64("18", 1, 1, 8); /* octal 1, 8 is ignored */
     TEST_STR_TO_UINT64("FFFFFFFF", 8, 0xffffffffu, 16); /* octal 1, 8 is ignored */
+    TEST_STR_TO_UINT64("18446744073709551615", 20, 18446744073709551615ULL, 10);
+    TEST_STR_TO_UINT64("18446744073709551616", 0, 0, 10); /* ERANGE */
+    TEST_STR_TO_UINT64("-1", 0, 0, 10); /* negative */
+    TEST_STR_TO_UINT64("-18446744073709551615", 0, 0, 10); /* 1 when negated */
+    TEST_STR_TO_UINT64("-0", 2, 0, 10);
 }
 
 static void test_strToDouble() {
@@ -548,6 +571,12 @@ static void test_matchCommand() {
     } while(0)                                                  \
 
     TEST_MATCH_COMMAND("A", "a", TRUE);
+    /* numeric suffix has to be a valid number, even if the number is not requested */
+    TEST_MATCH_COMMAND("CH#", "ch", TRUE);
+    TEST_MATCH_COMMAND("CH#", "ch2147483647", TRUE);
+    TEST_MATCH_COMMAND("CH#", "ch2147483648", FALSE);
+    TEST_MATCH_COMMAND("CH#", "ch99999999999999999999", FALSE);
+    TEST_MATCH_COMMAND2("CH#", "ch2147483648", FALSE, (-1));
     TEST_MATCH_COMMAND("Ab", "a", TRUE);
     TEST_MATCH_COMMAND("Ab", "ab", TRUE);
     TEST_MATCH_COMMAND("Ab", "aB", TRUE);

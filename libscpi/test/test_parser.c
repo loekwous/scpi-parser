@@ -90,6 +90,64 @@ static scpi_result_t test_routeClose(scpi_t * context) {
     return SCPI_RES_OK;
 }
 
+static int test_channel_count = 0;
+static int32_t test_channel_number = 0;
+
+static scpi_result_t test_channel(scpi_t * context) {
+    int32_t numbers[1];
+
+    test_channel_count++;
+    if (SCPI_CommandNumbers(context, numbers, 1, 1)) {
+        test_channel_number = numbers[0];
+    }
+
+    return SCPI_RES_OK;
+}
+
+static scpi_result_t test_multiValue(scpi_t * context) {
+    SCPI_ResultInt32(context, 1);
+    SCPI_ResultInt32(context, 2);
+    SCPI_ResultInt32(context, 3);
+
+    return SCPI_RES_OK;
+}
+
+static scpi_result_t test_blockValue(scpi_t * context) {
+    SCPI_ResultArbitraryBlock(context, "ab", 2);
+
+    return SCPI_RES_OK;
+}
+
+static scpi_result_t test_textValue(scpi_t * context) {
+    SCPI_ResultText(context, "hi");
+
+    return SCPI_RES_OK;
+}
+
+static scpi_result_t test_noValue(scpi_t * context) {
+    (void) context;
+
+    return SCPI_RES_OK;
+}
+
+static scpi_result_t test_rawValue(scpi_t * context) {
+    context->interface->write(context, "RAW", 3);
+
+    return SCPI_RES_OK;
+}
+
+static scpi_result_t test_emptyBlock(scpi_t * context) {
+    SCPI_ResultArbitraryBlockHeader(context, 0);
+
+    return SCPI_RES_OK;
+}
+
+static scpi_result_t test_writeValue(scpi_t * context) {
+    SCPI_ResultInt32(context, 7);
+
+    return SCPI_RES_OK;
+}
+
 static const scpi_command_t scpi_commands[] = {
     /* IEEE Mandated Commands (SCPI std V1999.0 4.1.1) */
     { .pattern = "*CLS", .callback = SCPI_CoreCls,},
@@ -135,6 +193,7 @@ static const scpi_command_t scpi_commands[] = {
 
     { .pattern = "ROUTe:CLOSe", .callback = test_routeClose,},
     { .pattern = "ROUTe:CLOSe?", .callback = test_routeClose,},
+    { .pattern = "CHANnel#", .callback = test_channel,},
     SCPI_CMD_LIST_END
 };
 
@@ -468,6 +527,30 @@ static void testInvalidProgramMessageUnit(void) {
     SCPI_Input(&scpi_context, "UT:CLOS 2\n", 10);
     CU_ASSERT_EQUAL(test_route_close_count, 0);
     CU_ASSERT_EQUAL(err_buffer_pos, 1);
+
+    output_buffer_clear();
+    error_buffer_clear();
+}
+
+static void testHeaderNumericSuffix(void) {
+#define TEST_CHANNEL(data, expected_runs, expected_number, expected_error) {    \
+    output_buffer_clear();                                          \
+    error_buffer_clear();                                           \
+    test_channel_count = 0;                                         \
+    test_channel_number = 0;                                        \
+    SCPI_Input(&scpi_context, data, strlen(data));                  \
+    CU_ASSERT_EQUAL(test_channel_count, expected_runs);             \
+    CU_ASSERT_EQUAL(test_channel_number, expected_number);          \
+    CU_ASSERT_EQUAL(err_buffer[0], expected_error);                 \
+}
+
+    TEST_CHANNEL("CHAN\n", 1, 1, 0);
+    TEST_CHANNEL("CHAN7\n", 1, 7, 0);
+    TEST_CHANNEL("CHAN2147483647\n", 1, 2147483647, 0);
+    /* a number out of range is not a valid header */
+    TEST_CHANNEL("CHAN2147483648\n", 0, 0, SCPI_ERROR_UNDEFINED_HEADER);
+    TEST_CHANNEL("CHAN99999999999999999999\n", 0, 0, SCPI_ERROR_UNDEFINED_HEADER);
+    TEST_CHANNEL("CHAN4294967297\n", 0, 0, SCPI_ERROR_UNDEFINED_HEADER);
 
     output_buffer_clear();
     error_buffer_clear();
@@ -1878,6 +1961,7 @@ int main() {
             || (NULL == CU_add_test(pSuite, "Commands handling", testCommandsHandling))
             || (NULL == CU_add_test(pSuite, "Error handling", testErrorHandling))
             || (NULL == CU_add_test(pSuite, "Invalid program message unit", testInvalidProgramMessageUnit))
+            || (NULL == CU_add_test(pSuite, "Header numeric suffix", testHeaderNumericSuffix))
             || (NULL == CU_add_test(pSuite, "Device dependent error handling", testErrorHandlingDeviceDependent))
             || (NULL == CU_add_test(pSuite, "IEEE 488.2 Mandatory commands", testIEEE4882))
             || (NULL == CU_add_test(pSuite, "Numeric list", testNumericList))

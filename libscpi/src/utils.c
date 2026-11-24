@@ -39,6 +39,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <errno.h>
 #include <math.h>
 
 #include "utils_private.h"
@@ -269,14 +270,35 @@ size_t SCPI_DoubleToStr(double val, char * str, size_t len) {
 }
 
 /**
+ * Check, that a string is a negative number (after optional whitespace)
+ * @param str   string value
+ * @return      TRUE if the first character is a minus sign
+ */
+static scpi_bool_t isNegativeNumber(const char * str) {
+    while (isspace((uint8_t) (str[0]))) {
+        str++;
+    }
+    return str[0] == '-';
+}
+
+/**
  * Converts string to signed 32bit integer representation
  * @param str   string value
  * @param val   32bit integer result
- * @return      number of bytes used in string
+ * @return      number of bytes used in string, 0 if there is no number or it is out of range
  */
 size_t strBaseToInt32(const char * str, int32_t * val, int8_t base) {
     char * endptr;
-    *val = strtol(str, &endptr, base);
+    long result;
+
+    errno = 0;
+    result = strtol(str, &endptr, base);
+    /* long may be wider than 32 bits */
+    if (errno == ERANGE || result != (long) (int32_t) result) {
+        *val = 0;
+        return 0;
+    }
+    *val = (int32_t) result;
     return endptr - str;
 }
 
@@ -284,11 +306,21 @@ size_t strBaseToInt32(const char * str, int32_t * val, int8_t base) {
  * Converts string to unsigned 32bit integer representation
  * @param str   string value
  * @param val   32bit integer result
- * @return      number of bytes used in string
+ * @return      number of bytes used in string, 0 if there is no number or it is out of range
  */
 size_t strBaseToUInt32(const char * str, uint32_t * val, int8_t base) {
     char * endptr;
-    *val = strtoul(str, &endptr, base);
+    unsigned long result;
+
+    errno = 0;
+    result = strtoul(str, &endptr, base);
+    /* strtoul accepts a minus sign and negates the value */
+    if (errno == ERANGE || result != (unsigned long) (uint32_t) result
+            || (result != 0 && isNegativeNumber(str))) {
+        *val = 0;
+        return 0;
+    }
+    *val = (uint32_t) result;
     return endptr - str;
 }
 
@@ -296,11 +328,19 @@ size_t strBaseToUInt32(const char * str, uint32_t * val, int8_t base) {
  * Converts string to signed 64bit integer representation
  * @param str   string value
  * @param val   64bit integer result
- * @return      number of bytes used in string
+ * @return      number of bytes used in string, 0 if there is no number or it is out of range
  */
 size_t strBaseToInt64(const char * str, int64_t * val, int8_t base) {
     char * endptr;
-    *val = SCPIDEFINE_strtoll(str, &endptr, base);
+    int64_t result;
+
+    errno = 0;
+    result = SCPIDEFINE_strtoll(str, &endptr, base);
+    if (errno == ERANGE) {
+        *val = 0;
+        return 0;
+    }
+    *val = result;
     return endptr - str;
 }
 
@@ -308,11 +348,20 @@ size_t strBaseToInt64(const char * str, int64_t * val, int8_t base) {
  * Converts string to unsigned 64bit integer representation
  * @param str   string value
  * @param val   64bit integer result
- * @return      number of bytes used in string
+ * @return      number of bytes used in string, 0 if there is no number or it is out of range
  */
 size_t strBaseToUInt64(const char * str, uint64_t * val, int8_t base) {
     char * endptr;
-    *val = SCPIDEFINE_strtoull(str, &endptr, base);
+    uint64_t result;
+
+    errno = 0;
+    result = SCPIDEFINE_strtoull(str, &endptr, base);
+    /* strtoull accepts a minus sign and negates the value */
+    if (errno == ERANGE || (result != 0 && isNegativeNumber(str))) {
+        *val = 0;
+        return 0;
+    }
+    *val = result;
     return endptr - str;
 }
 
@@ -396,6 +445,13 @@ scpi_bool_t compareStrAndNum(const char * str1, size_t len1, const char * str2, 
                 if (!isdigit((int) str2[i])) {
                     result = FALSE;
                     break;
+                }
+            }
+            if (result && len2 > len1) {
+                /* the number must be valid too, otherwise the header does not match */
+                int32_t tmpNum;
+                if (len1 + strBaseToInt32(str2 + len1, &tmpNum, 10) != len2) {
+                    result = FALSE;
                 }
             }
         }
