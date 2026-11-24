@@ -75,13 +75,20 @@ static int flushData(scpi_t * context) {
 }
 
 /**
- * Write result delimiter to output
+ * Write result delimiter to output. Inside one response unit it is a comma.
+ * The first data of a unit is preceded by the semicolon, which separates it
+ * from the response units of the earlier queries of the message. The semicolon
+ * is written with the data, so a query without an answer leaves no empty unit.
  * @param context
  * @return number of bytes written
  */
 static size_t writeDelimiter(scpi_t * context) {
     if (context->output_count > 0) {
         return writeData(context, ",", 1);
+    } else if (!context->first_output) {
+        /* separator of the response message units, written together with the
+         * first data of this unit, so a query without an answer leaves no trace */
+        return writeData(context, ";", 1);
     } else {
         return 0;
     }
@@ -128,11 +135,6 @@ static scpi_bool_t processCommand(scpi_t * context) {
     lex_state_t * state = &context->param_list.lex_state;
     scpi_bool_t result = TRUE;
     scpi_bool_t is_query = context->param_list.cmd_raw.data[context->param_list.cmd_raw.length - 1] == '?';
-
-    /* conditionally write ; */
-    if(!context->first_output && is_query) {
-        writeData(context, ";", 1);
-    }
 
     context->cmd_error = FALSE;
     context->output_count = 0;
@@ -248,6 +250,7 @@ scpi_bool_t SCPI_Parse(scpi_t * context, char * data, int len) {
 
     /* conditionally write new line */
     writeNewLine(context);
+    context->first_output = TRUE;
 
     return result;
 }

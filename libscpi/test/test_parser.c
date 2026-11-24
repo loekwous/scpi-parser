@@ -104,6 +104,50 @@ static scpi_result_t test_channel(scpi_t * context) {
     return SCPI_RES_OK;
 }
 
+static scpi_result_t test_multiValue(scpi_t * context) {
+    SCPI_ResultInt32(context, 1);
+    SCPI_ResultInt32(context, 2);
+    SCPI_ResultInt32(context, 3);
+
+    return SCPI_RES_OK;
+}
+
+static scpi_result_t test_blockValue(scpi_t * context) {
+    SCPI_ResultArbitraryBlock(context, "ab", 2);
+
+    return SCPI_RES_OK;
+}
+
+static scpi_result_t test_textValue(scpi_t * context) {
+    SCPI_ResultText(context, "hi");
+
+    return SCPI_RES_OK;
+}
+
+static scpi_result_t test_noValue(scpi_t * context) {
+    (void) context;
+
+    return SCPI_RES_OK;
+}
+
+static scpi_result_t test_rawValue(scpi_t * context) {
+    context->interface->write(context, "RAW", 3);
+
+    return SCPI_RES_OK;
+}
+
+static scpi_result_t test_emptyBlock(scpi_t * context) {
+    SCPI_ResultArbitraryBlockHeader(context, 0);
+
+    return SCPI_RES_OK;
+}
+
+static scpi_result_t test_writeValue(scpi_t * context) {
+    SCPI_ResultInt32(context, 7);
+
+    return SCPI_RES_OK;
+}
+
 static const scpi_command_t scpi_commands[] = {
     /* IEEE Mandated Commands (SCPI std V1999.0 4.1.1) */
     { .pattern = "*CLS", .callback = SCPI_CoreCls,},
@@ -149,6 +193,13 @@ static const scpi_command_t scpi_commands[] = {
 
     { .pattern = "ROUTe:CLOSe", .callback = test_routeClose,},
     { .pattern = "ROUTe:CLOSe?", .callback = test_routeClose,},
+    { .pattern = "TEST:MULTi?", .callback = test_multiValue,},
+    { .pattern = "TEST:BLOCk?", .callback = test_blockValue,},
+    { .pattern = "TEST:TEXT?", .callback = test_textValue,},
+    { .pattern = "TEST:EMPTy?", .callback = test_noValue,},
+    { .pattern = "TEST:WRITe", .callback = test_writeValue,},
+    { .pattern = "TEST:RAW?", .callback = test_rawValue,},
+    { .pattern = "TEST:ZBLOck?", .callback = test_emptyBlock,},
     { .pattern = "CHANnel#", .callback = test_channel,},
     SCPI_CMD_LIST_END
 };
@@ -196,8 +247,12 @@ static size_t SCPI_Write(scpi_t * context, const char * data, size_t len) {
     return output_buffer_write(data, len);
 }
 
+static int flush_count = 0;
+
 static scpi_result_t SCPI_Flush(scpi_t * context) {
     (void) context;
+
+    flush_count++;
 
     return SCPI_RES_OK;
 }
@@ -599,6 +654,66 @@ static void testConversionErrorReportedOnce(void) {
     CU_ASSERT_EQUAL(err_buffer_pos, 1);
     CU_ASSERT_EQUAL(err_buffer[0], SCPI_ERROR_DATA_OUT_OF_RANGE);
 
+    error_buffer_clear();
+}
+
+static void testResponseSeparator(void) {
+#define TEST_RESPONSE(data, output, expected_errors) {              \
+    output_buffer_clear();                                          \
+    error_buffer_clear();                                           \
+    SCPI_Input(&scpi_context, data, strlen(data));                  \
+    CU_ASSERT_STRING_EQUAL(output, output_buffer);                  \
+    CU_ASSERT_EQUAL(err_buffer_pos, expected_errors);               \
+}
+
+    /* a failing query leaves no empty response unit */
+    TEST_RESPONSE("*OPC?;ROUT:CLOS? x;*TST?\r\n", "1;0\r\n", 1);
+    TEST_RESPONSE("*OPC?;ROUT:CLOS? x\r\n", "1\r\n", 1);
+    TEST_RESPONSE("*OPC?;ROUT:CLOS? x;:ROUT:CLOS? x;*TST?\r\n", "1;0\r\n", 2);
+    TEST_RESPONSE("ROUT:CLOS? x;*OPC?\r\n", "1\r\n", 1);
+    TEST_RESPONSE("ROUT:CLOS? x;:ROUT:CLOS? x\r\n", "", 2);
+    TEST_RESPONSE("*OPC?;XYZ?;*TST?\r\n", "1;0\r\n", 1);
+
+    /* answers are separated as before */
+    TEST_RESPONSE("*OPC?;*TST?\r\n", "1;0\r\n", 0);
+    TEST_RESPONSE("TEST:MULT?\r\n", "1,2,3\r\n", 0);
+    TEST_RESPONSE("*OPC?;TEST:MULT?;*OPC?\r\n", "1;1,2,3;1\r\n", 0);
+    TEST_RESPONSE("*OPC?;ROUT:CLOS? x;:TEST:MULT?\r\n", "1;1,2,3\r\n", 1);
+    TEST_RESPONSE("*CLS;*OPC?;*RST;*TST?\r\n", "1;0\r\n", 0);
+
+    /* the separator is written with the first data of any kind of result */
+    TEST_RESPONSE("*OPC?;:TEST:BLOC?\r\n", "1;#12ab\r\n", 0);
+    TEST_RESPONSE("TEST:BLOC?;:TEST:BLOC?\r\n", "#12ab;#12ab\r\n", 0);
+    TEST_RESPONSE("*OPC?;:TEST:TEXT?;:TEST:TEXT?\r\n", "1;\"hi\";\"hi\"\r\n", 0);
+
+    /* a successful query without data leaves no empty unit after an answer */
+    TEST_RESPONSE("*OPC?;:TEST:EMPT?;*OPC?\r\n", "1;1\r\n", 0);
+    TEST_RESPONSE("*OPC?;:TEST:EMPT?\r\n", "1\r\n", 0);
+    /* but a first query without data counts as answered, as in the original library */
+    TEST_RESPONSE("TEST:EMPT?;*OPC?\r\n", ";1\r\n", 0);
+    TEST_RESPONSE("TEST:EMPT?;:TEST:EMPT?\r\n", "\r\n", 0);
+
+    /* a query that writes directly to the interface and a block without data end the message */
+    flush_count = 0;
+    TEST_RESPONSE("TEST:RAW?\r\n", "RAW\r\n", 0);
+    CU_ASSERT_EQUAL(flush_count, 1);
+    flush_count = 0;
+    TEST_RESPONSE("TEST:EMPT?\r\n", "\r\n", 0);
+    CU_ASSERT_EQUAL(flush_count, 1);
+    TEST_RESPONSE("TEST:ZBLO?\r\n", "#10\r\n", 0);
+    TEST_RESPONSE("TEST:ZBLO?;*OPC?\r\n", "#10;1\r\n", 0);
+    TEST_RESPONSE("*OPC?;:TEST:ZBLO?\r\n", "1;#10\r\n", 0);
+
+    /* output of a command that is not a query follows an answered query with a separator */
+    TEST_RESPONSE("*OPC?;:TEST:WRIT\r\n", "1;7\r\n", 0);
+
+    /* a result written after the message does not get a separator */
+    TEST_RESPONSE("*OPC?;:TEST:EMPT?\r\n", "1\r\n", 0);
+    output_buffer_clear();
+    SCPI_ResultInt32(&scpi_context, 42);
+    CU_ASSERT_STRING_EQUAL("42", output_buffer);
+
+    output_buffer_clear();
     error_buffer_clear();
 }
 
@@ -2172,6 +2287,7 @@ int main() {
             || (NULL == CU_add_test(pSuite, "Commands handling", testCommandsHandling))
             || (NULL == CU_add_test(pSuite, "Error handling", testErrorHandling))
             || (NULL == CU_add_test(pSuite, "Invalid program message unit", testInvalidProgramMessageUnit))
+            || (NULL == CU_add_test(pSuite, "Response separator", testResponseSeparator))
             || (NULL == CU_add_test(pSuite, "Device dependent error handling", testErrorHandlingDeviceDependent))
             || (NULL == CU_add_test(pSuite, "IEEE 488.2 Mandatory commands", testIEEE4882))
             || (NULL == CU_add_test(pSuite, "Header numeric suffix", testHeaderNumericSuffix))
