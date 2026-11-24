@@ -1429,6 +1429,57 @@ int scpiParser_parseAllProgramData(lex_state_t * state, scpi_token_t * token, in
 }
 
 /**
+ * Skip the rest of an invalid program message unit, so that nothing of it is
+ * executed. Stops at the unit separator or the terminator. Quoted strings and
+ * arbitrary block data may contain a unit separator and are skipped as a whole.
+ * A new line always ends the unit, so the result does not depend on how the
+ * input was split into chunks and an unterminated string or block cannot
+ * swallow the following messages.
+ * @param state
+ */
+static void skipInvalidProgramMessageUnit(lex_state_t * state) {
+    char quote = 0;
+    const char * end = state->buffer + state->len;
+
+    while (!scpiLex_IsEos(state)) {
+        char c = state->pos[0];
+
+        if (c == '\r' || c == '\n') {
+            break;
+        } else if (quote != 0) {
+            if (c == quote) {
+                quote = 0;
+            }
+        } else if (c == ';') {
+            break;
+        } else if (c == '"' || c == '\'') {
+            quote = c;
+        } else if (c == '#' && (end - state->pos) > 1 && state->pos[1] >= '1' && state->pos[1] <= '9') {
+            /* arbitrary block: #<n><n digits of length><data> */
+            int digits = state->pos[1] - '0';
+            long length = 0;
+            char * p = state->pos + 2;
+
+            while (digits > 0 && p < end && isdigit((uint8_t) (p[0]))) {
+                length = length * 10 + (p[0] - '0');
+                p++;
+                digits--;
+            }
+            if (digits == 0 && length <= (end - p)) {
+                /* the data of the block ends at the latest at a new line */
+                char * stop = p;
+                while (stop < p + length && stop[0] != '\r' && stop[0] != '\n') {
+                    stop++;
+                }
+                state->pos = stop;
+                continue;
+            }
+        }
+        state->pos++;
+    }
+}
+
+/**
  * Skip complete command line - program header and parameters
  * @param state
  * @param buffer
@@ -1462,12 +1513,17 @@ int scpiParser_detectProgramMessageUnit(scpi_parser_state_t * state, char * buff
     if (result == 0) result = scpiLex_Semicolon(&lex_state, &tmp);
 
     if (!scpiLex_IsEos(&lex_state) && (result == 0)) {
-        lex_state.pos++;
+        /* skip the rest of the invalid unit, up to its terminator */
+        skipInvalidProgramMessageUnit(&lex_state);
 
         state->programHeader.len = 1;
         state->programHeader.type = SCPI_TOKEN_INVALID;
 
         invalidateToken(&state->programData, lex_state.buffer);
+
+        if (scpiLex_NewLine(&lex_state, &tmp) == 0) {
+            scpiLex_Semicolon(&lex_state, &tmp);
+        }
     }
 
     if (SCPI_TOKEN_SEMICOLON == tmp.type) {

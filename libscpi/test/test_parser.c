@@ -79,6 +79,17 @@ static scpi_result_t SCPI_Sample(scpi_t * context) {
     return SCPI_RES_OK;
 }
 
+static int test_route_close_count = 0;
+
+static scpi_result_t test_routeClose(scpi_t * context) {
+    int32_t channel;
+
+    test_route_close_count++;
+    SCPI_ParamInt32(context, &channel, FALSE);
+
+    return SCPI_RES_OK;
+}
+
 static const scpi_command_t scpi_commands[] = {
     /* IEEE Mandated Commands (SCPI std V1999.0 4.1.1) */
     { .pattern = "*CLS", .callback = SCPI_CoreCls,},
@@ -121,6 +132,9 @@ static const scpi_command_t scpi_commands[] = {
     { .pattern = "STUB?", .callback = SCPI_StubQ,},
 
     { .pattern = "SAMple", .callback = SCPI_Sample,},
+
+    { .pattern = "ROUTe:CLOSe", .callback = test_routeClose,},
+    { .pattern = "ROUTe:CLOSe?", .callback = test_routeClose,},
     SCPI_CMD_LIST_END
 };
 
@@ -328,6 +342,88 @@ static void testErrorHandling(void) {
      * TODO: SCPI_ERROR_EXECUTION_ERROR
      * TODO: SCPI_ERROR_ILLEGAL_PARAMETER_VALUE
      */
+
+    output_buffer_clear();
+    error_buffer_clear();
+}
+
+static void testInvalidProgramMessageUnit(void) {
+#define TEST_INVALID_UNIT(data, expected_runs, expected_errors) {   \
+    output_buffer_clear();                                          \
+    error_buffer_clear();                                           \
+    test_route_close_count = 0;                                     \
+    SCPI_Input(&scpi_context, data, strlen(data));                  \
+    CU_ASSERT_EQUAL(test_route_close_count, expected_runs);         \
+    CU_ASSERT_EQUAL(err_buffer_pos, expected_errors);               \
+    CU_ASSERT_EQUAL(err_buffer[0], SCPI_ERROR_INVALID_CHARACTER);   \
+}
+
+    /* the tail of an invalid unit must not be executed, one error per unit */
+    TEST_INVALID_UNIT("\"abc\" ROUT:CLOS 3\n", 0, 1);
+    TEST_INVALID_UNIT("ROUT:CLOS (@1) :ROUT:CLOS 2\n", 0, 1);
+    TEST_INVALID_UNIT("(@1) ROUT:CLOS 3\n", 0, 1);
+    TEST_INVALID_UNIT("ROUT:CLOS (@ ROUT:CLOS 2\n", 0, 1);
+    TEST_INVALID_UNIT("ROUT:CLOS (@0)) :ROUT:CLOS 3\n", 0, 1);
+    TEST_INVALID_UNIT("XYZ (@1) :ROUT:CLOS 0\n", 0, 1);
+    TEST_INVALID_UNIT("*IDN? # :ROUT:CLOS 1\n", 0, 1);
+    TEST_INVALID_UNIT("ROUT:CLOS? * :ROUTe:CLOSe (@3)\n", 0, 1);
+
+    /* valid units around an invalid unit keep running */
+    TEST_INVALID_UNIT("ROUT:CLOS 1;\"x\" ROUT:CLOS 2;:ROUT:CLOS 3\n", 2, 1);
+    TEST_INVALID_UNIT("ROUT:CLOS 1;(@1) ROUT:CLOS 2\n", 1, 1);
+    TEST_INVALID_UNIT("(@1) ROUT:CLOS 2\r\nROUT:CLOS 3\r\n", 1, 1);
+
+    /* separators in strings and blocks do not end the invalid unit */
+    TEST_INVALID_UNIT("ROUT:CLOS 1 \"a;b\" ROUT:CLOS 2;:ROUT:CLOS 3\n", 1, 1);
+    TEST_INVALID_UNIT("ROUT:CLOS 1 'a;b' ROUT:CLOS 2;:ROUT:CLOS 3\n", 1, 1);
+    TEST_INVALID_UNIT("ROUT:CLOS 1 #13a;b ROUT:CLOS 2;:ROUT:CLOS 3\n", 1, 1);
+
+    /* an unterminated string or block ends at the new line */
+    TEST_INVALID_UNIT("x \"\nROUT:CLOS 1\n", 1, 1);
+    TEST_INVALID_UNIT("x 'it\nROUT:CLOS 1\n", 1, 1);
+    TEST_INVALID_UNIT("ROUT:CLOS 1 \"\nROUT:CLOS 2\n", 1, 1);
+    TEST_INVALID_UNIT("(@1) #15ab\nROUT:CLOS 1\n", 1, 1);
+    TEST_INVALID_UNIT("(@1) #15ab\r\nROUT:CLOS 1\r\n", 1, 1);
+    /* a block longer than the input is not a block */
+    TEST_INVALID_UNIT("ROUT:CLOS 1 x #3999;:ROUT:CLOS 2\n", 1, 1);
+
+    /* the result does not depend on the chunking of the input */
+    output_buffer_clear();
+    error_buffer_clear();
+    test_route_close_count = 0;
+    SCPI_Input(&scpi_context, "(@1) #15ab\nROUT:CLOS 1\n", 23);
+    CU_ASSERT_EQUAL(test_route_close_count, 1);
+    CU_ASSERT_EQUAL(err_buffer_pos, 1);
+    output_buffer_clear();
+    error_buffer_clear();
+    test_route_close_count = 0;
+    SCPI_Input(&scpi_context, "(@1) #15ab\n", 11);
+    SCPI_Input(&scpi_context, "ROUT:CLOS 1\n", 12);
+    CU_ASSERT_EQUAL(test_route_close_count, 1);
+    CU_ASSERT_EQUAL(err_buffer_pos, 1);
+
+    /* many lines after an unterminated string still run */
+    output_buffer_clear();
+    error_buffer_clear();
+    test_route_close_count = 0;
+    SCPI_Input(&scpi_context, "ROUT:CLOS 1 \"\n", 14);
+    {
+        int i;
+        for (i = 0; i < 20; i++) {
+            SCPI_Input(&scpi_context, "ROUT:CLOS 2\n", 12);
+        }
+    }
+    CU_ASSERT_EQUAL(test_route_close_count, 20);
+    CU_ASSERT_EQUAL(err_buffer_pos, 1);
+
+    /* the same in more than one chunk */
+    output_buffer_clear();
+    error_buffer_clear();
+    test_route_close_count = 0;
+    SCPI_Input(&scpi_context, "ROUT:CLOS (@1) :RO", 18);
+    SCPI_Input(&scpi_context, "UT:CLOS 2\n", 10);
+    CU_ASSERT_EQUAL(test_route_close_count, 0);
+    CU_ASSERT_EQUAL(err_buffer_pos, 1);
 
     output_buffer_clear();
     error_buffer_clear();
@@ -1737,6 +1833,7 @@ int main() {
             || (NULL == CU_add_test(pSuite, "SCPI_ParamChoice", testSCPI_ParamChoice))
             || (NULL == CU_add_test(pSuite, "Commands handling", testCommandsHandling))
             || (NULL == CU_add_test(pSuite, "Error handling", testErrorHandling))
+            || (NULL == CU_add_test(pSuite, "Invalid program message unit", testInvalidProgramMessageUnit))
             || (NULL == CU_add_test(pSuite, "Device dependent error handling", testErrorHandlingDeviceDependent))
             || (NULL == CU_add_test(pSuite, "IEEE 488.2 Mandatory commands", testIEEE4882))
             || (NULL == CU_add_test(pSuite, "Numeric list", testNumericList))
