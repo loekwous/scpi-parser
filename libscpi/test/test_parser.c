@@ -387,6 +387,50 @@ static void testInvalidProgramMessageUnit(void) {
     /* a block longer than the input is not a block */
     TEST_INVALID_UNIT("ROUT:CLOS 1 x #3999;:ROUT:CLOS 2\n", 1, 1);
 
+    /* a missing parameter after a comma */
+    TEST_INVALID_UNIT("ROUT:CLOS 1,\n", 0, 1);
+    TEST_INVALID_UNIT("ROUT:CLOS 1, \n", 0, 1);
+    TEST_INVALID_UNIT("ROUT:CLOS 1,;:ROUT:CLOS 2\n", 1, 1);
+    TEST_INVALID_UNIT("ROUT:CLOS 1,\r\n", 0, 1);
+
+    /* a comma at the border of two chunks is followed by the next parameter */
+    output_buffer_clear();
+    error_buffer_clear();
+    SCPI_Input(&scpi_context, "TEXT? \"PARAM1\",", 15);
+    CU_ASSERT_EQUAL(err_buffer_pos, 0);
+    SCPI_Input(&scpi_context, " \"PARAM2\"\r\n", 11);
+    CU_ASSERT_STRING_EQUAL("\"PARAM2\"\r\n", output_buffer);
+    CU_ASSERT_EQUAL(err_buffer_pos, 0);
+
+    /* a trailing comma at the end of the input, flushed without a terminator */
+    output_buffer_clear();
+    error_buffer_clear();
+    test_route_close_count = 0;
+    SCPI_Input(&scpi_context, "ROUT:CLOS 1,", 12);
+    CU_ASSERT_EQUAL(err_buffer_pos, 0);
+    SCPI_Input(&scpi_context, NULL, 0);
+    CU_ASSERT_EQUAL(test_route_close_count, 0);
+    CU_ASSERT_EQUAL(err_buffer_pos, 1);
+    CU_ASSERT_EQUAL(err_buffer[0], SCPI_ERROR_INVALID_CHARACTER);
+
+    output_buffer_clear();
+    error_buffer_clear();
+    test_route_close_count = 0;
+    {
+        char data[] = "ROUT:CLOS 1,";
+        SCPI_Parse(&scpi_context, data, 12);
+    }
+    CU_ASSERT_EQUAL(test_route_close_count, 0);
+    CU_ASSERT_EQUAL(err_buffer_pos, 1);
+
+    /* a trailing white space is not an error */
+    output_buffer_clear();
+    error_buffer_clear();
+    test_route_close_count = 0;
+    SCPI_Input(&scpi_context, "ROUT:CLOS \n", 11);
+    CU_ASSERT_EQUAL(test_route_close_count, 1);
+    CU_ASSERT_EQUAL(err_buffer_pos, 0);
+
     /* the result does not depend on the chunking of the input */
     output_buffer_clear();
     error_buffer_clear();

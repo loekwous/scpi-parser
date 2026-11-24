@@ -1490,6 +1490,7 @@ int scpiParser_detectProgramMessageUnit(scpi_parser_state_t * state, char * buff
     lex_state_t lex_state;
     scpi_token_t tmp;
     int result = 0;
+    scpi_bool_t invalid = FALSE;
 
     lex_state.buffer = lex_state.pos = buffer;
     lex_state.len = len;
@@ -1500,7 +1501,20 @@ int scpiParser_detectProgramMessageUnit(scpi_parser_state_t * state, char * buff
 
     if (scpiLex_ProgramHeader(&lex_state, &state->programHeader) >= 0) {
         if (scpiLex_WhiteSpace(&lex_state, &tmp) > 0) {
+            const char * dataStart = lex_state.pos;
+
             scpiParser_parseAllProgramData(&lex_state, &state->programData, &state->numberOfParameters);
+
+            /* the last parameter is missing after a comma */
+            if (state->programData.type == SCPI_TOKEN_UNKNOWN) {
+                const char * last = lex_state.pos;
+                while (last > dataStart && (last[-1] == ' ' || last[-1] == '\t')) {
+                    last--;
+                }
+                if (last > dataStart && last[-1] == ',') {
+                    invalid = TRUE;
+                }
+            }
         } else {
             invalidateToken(&state->programData, lex_state.pos);
         }
@@ -1509,13 +1523,16 @@ int scpiParser_detectProgramMessageUnit(scpi_parser_state_t * state, char * buff
         invalidateToken(&state->programData, lex_state.buffer);
     }
 
-    if (result == 0) result = scpiLex_NewLine(&lex_state, &tmp);
-    if (result == 0) result = scpiLex_Semicolon(&lex_state, &tmp);
+    if (!invalid) {
+        if (result == 0) result = scpiLex_NewLine(&lex_state, &tmp);
+        if (result == 0) result = scpiLex_Semicolon(&lex_state, &tmp);
+    }
 
-    if (!scpiLex_IsEos(&lex_state) && (result == 0)) {
+    if (invalid || (!scpiLex_IsEos(&lex_state) && (result == 0))) {
         /* skip the rest of the invalid unit, up to its terminator */
         skipInvalidProgramMessageUnit(&lex_state);
 
+        state->numberOfParameters = 0;
         state->programHeader.len = 1;
         state->programHeader.type = SCPI_TOKEN_INVALID;
 
